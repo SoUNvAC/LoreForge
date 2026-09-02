@@ -1,0 +1,14 @@
+Checks: >
+  -*,
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-identifier-naming
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|include)/'
+CheckOptions:
+  readability-identifier-naming.NamespaceCase: lower_case
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.FunctionCase: camelBack
+  readability-identifier-naming.VariableCase: camelBack

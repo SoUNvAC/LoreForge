@@ -1,0 +1,122 @@
+# CMake build outputs
+/build/
+/build-*/
+/out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+install_manifest.txt
+
+# C++ compiler outputs
+*.obj
+*.o
+*.lo
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Qt generated files
+*_autogen/
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+.qmake.stash
+*.qmlc
+*.jsc
+
+# Local CMake and Qt configuration
+CMakeUserPresets.json
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+*.user
+
+# IDE and editor files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OpenAI local project metadata
+.openai/
+
+# Dependency-manager outputs
+.deps/
+vcpkg_installed/
+.conan/
+conanbuildinfo.*
+conan.lock
+
+# Test, coverage, and diagnostic outputs
+aqtinstall.log
+test-results/
+coverage/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+*.log
+*.dmp
+crash-reports/
+
+# LoreForge local runtime data
+/data/
+/runtime/
+/projects/
+/cache/
+/analysis-cache/
+/llm-runs/
+
+# Local databases and transient files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Private or copyrighted novel corpora
+/imports/
+/private-corpus/
+/local-corpus/
+
+# Local models and large downloads
+/models/
+/downloads/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.token
+secrets.*
+config.local.*
+.ssh/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+LoreForge_Engineering_Plan.md
