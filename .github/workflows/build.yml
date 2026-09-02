@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -22,7 +22,7 @@ jobs:
           cache: true
 
       - name: Configure
-        run: cmake --preset windows-msvc-debug
+        run: cmake --preset windows-msvc-debug -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
 
       - name: Build
         run: cmake --build --preset windows-msvc-debug
