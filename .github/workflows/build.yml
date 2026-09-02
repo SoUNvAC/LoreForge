@@ -22,7 +22,18 @@ jobs:
           cache: true
 
       - name: Configure
-        run: cmake --preset windows-msvc-debug -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+        shell: pwsh
+        run: |
+          $output = & cmake --preset windows-msvc-debug "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+
+          if ($exitCode -ne 0) {
+            $details = ($output | Select-Object -Last 30 | Out-String).Trim()
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=CMake configure failed::$details"
+            exit $exitCode
+          }
 
       - name: Build
         run: cmake --build --preset windows-msvc-debug
