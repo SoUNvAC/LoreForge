@@ -37,6 +37,7 @@ function(loreforge_add_unit_test target source)
             LoreForge::Document
             LoreForge::ProjectOptions
             Qt6::Test
+            ${ARGN}
     )
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
@@ -44,3 +45,32 @@ endfunction()
 loreforge_add_unit_test(LoreForgeCoreTypesTests core_types_test.cpp)
 loreforge_add_unit_test(LoreForgeDocumentModelTests document_model_test.cpp)
 loreforge_add_unit_test(LoreForgeDocumentJsonCodecTests document_json_codec_test.cpp)
+loreforge_add_unit_test(LoreForgeTextProcessingTests text_processing_test.cpp LoreForge::Text)
+loreforge_add_unit_test(LoreForgePlainTextParserTests plain_text_parser_test.cpp LoreForge::Parser)
+
+qt_add_executable(
+    LoreForgeMainWindowTests
+    main_window_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/main_window.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/main_window.h
+)
+
+target_include_directories(
+    LoreForgeMainWindowTests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/app
+        ${PROJECT_SOURCE_DIR}/tests/support
+)
+
+target_link_libraries(
+    LoreForgeMainWindowTests
+    PRIVATE
+        LoreForge::Parser
+        LoreForge::Text
+        LoreForge::ProjectOptions
+        Qt6::Test
+        Qt6::Widgets
+)
+
+add_test(NAME LoreForgeMainWindowTests COMMAND LoreForgeMainWindowTests)
+set_tests_properties(LoreForgeMainWindowTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

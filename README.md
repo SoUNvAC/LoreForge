@@ -8,9 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 1 adds type-safe deterministic IDs, immutable UTF-8 source spans, SHA-256 content
-hashes, the normalized Document model, schema-versioned JSON serialization, and strict
-model validation. Import and narrative features intentionally belong to later phases.
+Phase 2 adds deterministic UTF-8 plain-text import, BOM and line-ending handling,
+English and Chinese chapter detection, paragraph normalization, word counts, a chapter
+list, and a basic reader. Original source bytes remain immutable and every imported
+block retains its source byte span. Persistence and narrative features intentionally
+belong to later phases.
 
 ## Requirements
 

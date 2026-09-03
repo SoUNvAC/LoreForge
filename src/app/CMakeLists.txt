@@ -10,6 +10,8 @@ target_link_libraries(
     LoreForge
     PRIVATE
         LoreForge::Core
+        LoreForge::Parser
+        LoreForge::Text
         LoreForge::ProjectOptions
         Qt6::Widgets
 )
