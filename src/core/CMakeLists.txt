@@ -2,7 +2,9 @@ qt_add_library(
     LoreForgeCore STATIC
     application_config.cpp
     build_info.cpp
+    content_hash.cpp
     logging.cpp
+    source_span.cpp
 )
 
 add_library(LoreForge::Core ALIAS LoreForgeCore)

@@ -6,11 +6,11 @@ versioning, and proofreading community-maintained novels.
 The project is developed one verified phase at a time. Its engineering contract is
 maintained with the project planning materials.
 
-## Current phase
+## Current baseline
 
-Phase 0 establishes the build, application shell, core library, tests, logging,
-configuration, formatting, static-analysis, and CI foundations. Import and narrative
-features intentionally belong to later phases.
+Phase 1 adds type-safe deterministic IDs, immutable UTF-8 source spans, SHA-256 content
+hashes, the normalized Document model, schema-versioned JSON serialization, and strict
+model validation. Import and narrative features intentionally belong to later phases.
 
 ## Requirements
 

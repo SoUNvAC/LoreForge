@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "document": {
+    "id": "book_4e62443106ccf118d3d2a1acf5572718",
+    "content_hash": "9f1202426fa961233d640381c5d915fce56cc4258c1c7fc6ccf8ebfe3077f0c7",
+    "metadata": {
+      "title": "Handcrafted Fixture",
+      "authors": [
+        "LoreForge Tests"
+      ],
+      "language": "en",
+      "source_format": "txt",
+      "source_locator": "fixtures/handcrafted.txt",
+      "source_hash": "752edf1bd9d7de62eb35651e65c0fa636fe57a893f404e0eba6b80a843933e62"
+    },
+    "chapters": [
+      {
+        "id": "chapter_36d083383780839383276757403f8862",
+        "index": 0,
+        "title": "Chapter One",
+        "blocks": [
+          {
+            "type": "heading",
+            "text": "Chapter One",
+            "source_span": {
+              "source_id": "fixtures/handcrafted.txt",
+              "start_byte": 0,
+              "end_byte": 11
+            }
+          },
+          {
+            "type": "paragraph",
+            "text": "Hello, world.",
+            "source_span": {
+              "source_id": "fixtures/handcrafted.txt",
+              "start_byte": 12,
+              "end_byte": 25
+            }
+          },
+          {
+            "type": "scene_break",
+            "text": "***",
+            "source_span": {
+              "source_id": "fixtures/handcrafted.txt",
+              "start_byte": 26,
+              "end_byte": 29
+            }
+          }
+        ]
+      },
+      {
+        "id": "chapter_47f462b74f7ac7b773315db631dfba6e",
+        "index": 1,
+        "title": "Chapter Two",
+        "blocks": [
+          {
+            "type": "heading",
+            "text": "Chapter Two",
+            "source_span": {
+              "source_id": "fixtures/handcrafted.txt",
+              "start_byte": 30,
+              "end_byte": 41
+            }
+          },
+          {
+            "type": "paragraph",
+            "text": "Goodbye.",
+            "source_span": {
+              "source_id": "fixtures/handcrafted.txt",
+              "start_byte": 42,
+              "end_byte": 50
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
