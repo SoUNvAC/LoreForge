@@ -8,17 +8,17 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 2 adds deterministic UTF-8 plain-text import, BOM and line-ending handling,
-English and Chinese chapter detection, paragraph normalization, word counts, a chapter
-list, and a basic reader. Original source bytes remain immutable and every imported
-block retains its source byte span. Persistence and narrative features intentionally
-belong to later phases.
+Phase 3 adds migration-managed SQLite project persistence with typed storage errors,
+transactional project/book/chapter repositories, deterministic document round trips,
+rollback guarantees, and corruption detection. Plain-text import keeps original source
+bytes immutable and every imported block retains its source byte span. EPUB and
+narrative features intentionally belong to later phases.
 
 ## Requirements
 
 - CMake 3.25 or newer
 - Visual Studio 2022 with the C++ desktop workload
-- Qt 6.5 or newer for MSVC 2022, including Qt Test
+- Qt 6.5 or newer for MSVC 2022, including Qt SQL and Qt Test
 
 ## Build and test
 

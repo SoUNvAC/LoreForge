@@ -52,3 +52,26 @@ target_link_libraries(
 )
 
 add_test(NAME LoreForgePlainTextImportFixtureTests COMMAND LoreForgePlainTextImportFixtureTests)
+
+qt_add_executable(
+    LoreForgeStorageIntegrationTests
+    storage_integration_test.cpp
+)
+
+target_include_directories(
+    LoreForgeStorageIntegrationTests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests/support
+)
+
+target_link_libraries(
+    LoreForgeStorageIntegrationTests
+    PRIVATE
+        LoreForge::Document
+        LoreForge::Storage
+        LoreForge::ProjectOptions
+        Qt6::Sql
+        Qt6::Test
+)
+
+add_test(NAME LoreForgeStorageIntegrationTests COMMAND LoreForgeStorageIntegrationTests)

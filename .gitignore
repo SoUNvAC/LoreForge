@@ -85,6 +85,10 @@ crash-reports/
 *.db-wal
 *.sqlite
 *.sqlite3
+*.loreforge
+*.loreforge-journal
+*.loreforge-shm
+*.loreforge-wal
 
 # Private or copyrighted novel corpora
 /imports/

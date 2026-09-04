@@ -18,6 +18,9 @@ The Phase 0 application shell depends on the core foundation. Phase 1 freezes th
 `core` and `document` contracts. Phase 2 adds deterministic `text` utilities and a
 `parser` adapter that produces the Document model. The Widgets UI requests an import and
 renders that domain result; it does not repair parser output or detect chapters itself.
+Phase 3 adds a `storage` adapter beneath use-case/UI code. Its repositories validate
+domain objects, enforce explicit ordering, and apply versioned SQLite migrations; upper
+layers never compensate for stored-data defects.
 
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
