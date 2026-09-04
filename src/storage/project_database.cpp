@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 3;
+constexpr int latestSchemaVersion = 4;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -223,6 +223,61 @@ StorageStatus applyLLMRunMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyInferenceArtifactMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/004_inference_artifacts.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("The inference-artifact migration is unavailable."),
+                         migration.errorString(), false);
+    }
+    if (!database.transaction()) {
+        return sqlError(StorageErrorCode::TransactionFailed,
+                        QStringLiteral("Could not start the schema migration transaction."),
+                        database.lastError());
+    }
+    const auto statements = QString::fromUtf8(migration.readAll()).split(QLatin1Char(';'));
+    for (const auto& statement : statements) {
+        if (statement.trimmed().isEmpty()) {
+            continue;
+        }
+        if (const auto status =
+                executeSql(database, statement, StorageErrorCode::MigrationFailed,
+                           QStringLiteral("The inference-artifact migration failed."));
+            status.has_value()) {
+            database.rollback();
+            return status;
+        }
+    }
+    QSqlQuery recordMigration(database);
+    recordMigration.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(4, ?, ?)"));
+    recordMigration.addBindValue(QStringLiteral("004_inference_artifacts"));
+    recordMigration.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!recordMigration.exec()) {
+        const auto migrationError =
+            sqlError(StorageErrorCode::MigrationFailed,
+                     QStringLiteral("Could not record the inference-artifact migration."),
+                     recordMigration.lastError());
+        database.rollback();
+        return migrationError;
+    }
+    if (const auto status = executeSql(database, QStringLiteral("PRAGMA user_version = 4"),
+                                       StorageErrorCode::MigrationFailed,
+                                       QStringLiteral("Could not update the schema version."));
+        status.has_value()) {
+        database.rollback();
+        return status;
+    }
+    if (!database.commit()) {
+        const auto commitError = sqlError(StorageErrorCode::TransactionFailed,
+                                          QStringLiteral("Could not commit the schema migration."),
+                                          database.lastError());
+        database.rollback();
+        return commitError;
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -263,7 +318,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     if (!tables.exec(
             QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
                            "('schema_migrations', 'projects', 'books', 'chapters', 'blocks', "
-                           "'llm_runs')"))) {
+                           "'llm_runs', 'prompt_templates', 'prompt_versions', 'output_schemas', "
+                           "'context_snapshots', 'llm_run_artifacts')"))) {
         return sqlError(StorageErrorCode::CorruptDatabase,
                         QStringLiteral("The project database schema could not be inspected."),
                         tables.lastError());
@@ -273,8 +329,17 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         presentTables.insert(tables.value(0).toString());
     }
     const QSet<QString> requiredTables{
-        QStringLiteral("schema_migrations"), QStringLiteral("projects"), QStringLiteral("books"),
-        QStringLiteral("chapters"),          QStringLiteral("blocks"),   QStringLiteral("llm_runs"),
+        QStringLiteral("schema_migrations"),
+        QStringLiteral("projects"),
+        QStringLiteral("books"),
+        QStringLiteral("chapters"),
+        QStringLiteral("blocks"),
+        QStringLiteral("llm_runs"),
+        QStringLiteral("prompt_templates"),
+        QStringLiteral("prompt_versions"),
+        QStringLiteral("output_schemas"),
+        QStringLiteral("context_snapshots"),
+        QStringLiteral("llm_run_artifacts"),
     };
     if (presentTables != requiredTables) {
         return makeError(StorageErrorCode::CorruptDatabase,
@@ -324,6 +389,33 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     if (llmRunColumnNames != requiredLLMRunColumns) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The LLM-run schema is incomplete."), {}, false);
+    }
+    QSqlQuery artifactColumns(database);
+    if (!artifactColumns.exec(QStringLiteral("PRAGMA table_info(llm_run_artifacts)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The inference-artifact schema could not be inspected."),
+                        artifactColumns.lastError());
+    }
+    QSet<QString> artifactColumnNames;
+    while (artifactColumns.next()) {
+        artifactColumnNames.insert(artifactColumns.value(1).toString());
+    }
+    const QSet<QString> requiredArtifactColumns{
+        QStringLiteral("run_id"),
+        QStringLiteral("prompt_template_id"),
+        QStringLiteral("prompt_version"),
+        QStringLiteral("output_schema_id"),
+        QStringLiteral("output_schema_version"),
+        QStringLiteral("context_snapshot_id"),
+        QStringLiteral("raw_request"),
+        QStringLiteral("raw_response"),
+        QStringLiteral("parsed_response_json"),
+        QStringLiteral("validation_status"),
+        QStringLiteral("validation_errors_json"),
+    };
+    if (artifactColumnNames != requiredArtifactColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The inference-artifact schema is incomplete."), {}, false);
     }
     return std::nullopt;
 }
@@ -377,6 +469,12 @@ StorageResult<int> migrate(QSqlDatabase& database) {
             return *status;
         }
         version = 3;
+    }
+    if (version == 3) {
+        if (const auto status = applyInferenceArtifactMigration(database); status.has_value()) {
+            return *status;
+        }
+        version = 4;
     }
 
     QSqlQuery userVersion(database);

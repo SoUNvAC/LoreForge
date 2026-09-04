@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
@@ -60,6 +61,8 @@ struct LLMResponse final {
     TokenUsage usage;
     int attemptCount = 0;
     qint64 latencyMs = 0;
+    QByteArray rawRequest;
+    QByteArray rawResponse;
 
     friend bool operator==(const LLMResponse&, const LLMResponse&) = default;
 };
@@ -82,6 +85,8 @@ struct LLMError final {
     int httpStatus = 0;
     int attemptCount = 0;
     qint64 latencyMs = 0;
+    QByteArray rawRequest;
+    QByteArray rawResponse;
 
     friend bool operator==(const LLMError&, const LLMError&) = default;
 };

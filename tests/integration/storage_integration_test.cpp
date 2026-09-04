@@ -1,12 +1,16 @@
 #include "document_fixture.h"
 
 #include "loreforge/document/document_json_codec.h"
+#include "loreforge/inference/inference_types.h"
+#include "loreforge/inference/output_validator.h"
 #include "loreforge/storage/book_repository.h"
+#include "loreforge/storage/inference_repository.h"
 #include "loreforge/storage/llm_run_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/project_repository.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -28,6 +32,7 @@ class StorageIntegrationTest final : public QObject {
     void migratesAnExistingVersionZeroDatabase();
     void migratesAnExistingVersionOneDatabase();
     void persistsLLMRunsAcrossReopen();
+    void preservesInspectableInferenceSnapshotsAcrossReopen();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -76,7 +81,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 3);
+    QCOMPARE(database->schemaVersion(), 4);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -167,7 +172,7 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 3);
+    QCOMPARE(database->schemaVersion(), 4);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
@@ -211,11 +216,13 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 3);
+    QCOMPARE(database->schemaVersion(), 4);
     database.reset();
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));
     QVERIFY(executeRawSql(databasePath, QStringLiteral("SELECT id FROM llm_runs LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath,
+                          QStringLiteral("SELECT run_id FROM llm_run_artifacts LIMIT 1")));
 }
 
 void StorageIntegrationTest::persistsLLMRunsAcrossReopen() {
@@ -280,6 +287,103 @@ void StorageIntegrationTest::persistsLLMRunsAcrossReopen() {
     QVERIFY(std::holds_alternative<QList<loreforge::storage::LLMRunRecord>>(listed));
     QCOMPARE(std::get<QList<loreforge::storage::LLMRunRecord>>(listed),
              QList<loreforge::storage::LLMRunRecord>{succeeded});
+}
+
+void StorageIntegrationTest::preservesInspectableInferenceSnapshotsAcrossReopen() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(QStringLiteral("inference-snapshot.loreforge"));
+    auto created = loreforge::storage::ProjectDatabase::create(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+
+    const auto createdAt = QDateTime::fromString(u"2026-09-04T02:00:00.000Z"_s, Qt::ISODateWithMs);
+    const QUuid requestId(u"{63a3ebf3-638b-4bf4-b00a-cbddbe4cf403}"_s);
+    const auto runId = loreforge::core::LLMRunId::fromStableKey(requestId.toString());
+    loreforge::storage::LLMRunRepository runs(*database);
+    const loreforge::storage::LLMRunRecord run{runId,
+                                               projectRecord().id,
+                                               requestId,
+                                               u"qwen"_s,
+                                               u"qwen-fixture"_s,
+                                               loreforge::storage::LLMRunStatus::Succeeded,
+                                               1,
+                                               11,
+                                               4,
+                                               15,
+                                               createdAt,
+                                               createdAt.addMSecs(320),
+                                               320,
+                                               {},
+                                               {}};
+    QVERIFY(!runs.save(run).has_value());
+
+    const auto prompt = loreforge::inference::makePromptVersion(
+        {loreforge::core::PromptTemplateId::fromStableKey(u"fixture-extraction"_s),
+         u"Fixture extraction"_s},
+        1, u"Return one named fixture."_s, createdAt);
+    const QJsonObject schemaJson{
+        {u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
+        {u"type"_s, u"object"_s},
+        {u"required"_s, QJsonArray{u"name"_s}},
+        {u"properties"_s, QJsonObject{{u"name"_s, QJsonObject{{u"type"_s, u"string"_s}}}}},
+        {u"additionalProperties"_s, false},
+    };
+    const auto outputSchema = loreforge::inference::makeOutputSchema(
+        loreforge::core::OutputSchemaId::fromStableKey(u"fixture-output"_s), u"Fixture output"_s, 1,
+        schemaJson, createdAt);
+    const auto contextSnapshot = loreforge::inference::makeContextSnapshot(
+        loreforge::core::ContextSnapshotId::fromStableKey(u"fixture-context"_s), projectRecord().id,
+        QJsonObject{{u"source"_s, u"chapter-1"_s}, {u"text"_s, u"Lin entered."_s}}, createdAt);
+    const QByteArray rawRequest = R"({"model":"qwen-fixture","messages":[]})";
+    const QByteArray rawResponse = R"({"choices":[{"message":{"content":"{\"name\":\"Lin\"}"}}]})";
+    const QJsonDocument parsedResponse(QJsonObject{{u"name"_s, u"Lin"_s}});
+    const auto validation = loreforge::inference::OutputValidator::validate(
+        outputSchema.schema, parsedResponse.object());
+    QVERIFY(validation.isValid());
+
+    loreforge::storage::InferenceRepository inference(*database);
+    QVERIFY(!inference.savePromptVersion(prompt).has_value());
+    QVERIFY(!inference.saveOutputSchema(outputSchema).has_value());
+    QVERIFY(!inference.saveContextSnapshot(contextSnapshot).has_value());
+    const loreforge::inference::LLMRunArtifacts pending{
+        runId,
+        prompt.prompt.id,
+        prompt.version,
+        outputSchema.id,
+        outputSchema.version,
+        contextSnapshot.id,
+        rawRequest,
+        std::nullopt,
+        std::nullopt,
+        {loreforge::inference::ValidationStatus::Pending, {}},
+    };
+    QVERIFY(!inference.createRunArtifacts(pending).has_value());
+    QVERIFY(!inference.finalizeRunArtifacts(runId, rawResponse, parsedResponse, validation)
+                 .has_value());
+    const auto duplicatePrompt = inference.savePromptVersion(prompt);
+    QVERIFY(duplicatePrompt.has_value());
+    QCOMPARE(duplicatePrompt->code, loreforge::storage::StorageErrorCode::Conflict);
+    database.reset();
+
+    auto reopened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(reopened));
+    database = takeDatabase(reopened);
+    loreforge::storage::InferenceRepository reopenedInference(*database);
+    const auto inspected = reopenedInference.inspectRun(runId);
+    QVERIFY(std::holds_alternative<loreforge::storage::StoredInferenceSnapshot>(inspected));
+    const auto& snapshot = std::get<loreforge::storage::StoredInferenceSnapshot>(inspected);
+    QVERIFY(snapshot.promptVersion == prompt);
+    QVERIFY(snapshot.outputSchema == outputSchema);
+    QVERIFY(snapshot.contextSnapshot == contextSnapshot);
+    QCOMPARE(snapshot.runArtifacts.rawRequest, rawRequest);
+    QVERIFY(snapshot.runArtifacts.rawResponse.has_value());
+    QCOMPARE(*snapshot.runArtifacts.rawResponse, rawResponse);
+    QVERIFY(snapshot.runArtifacts.parsedResponse.has_value());
+    QCOMPARE(*snapshot.runArtifacts.parsedResponse, parsedResponse);
+    QCOMPARE(snapshot.runArtifacts.validation, validation);
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {

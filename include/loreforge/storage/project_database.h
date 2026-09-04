@@ -14,6 +14,7 @@ namespace loreforge::storage {
 
 class BookRepository;
 class ChapterRepository;
+class InferenceRepository;
 class LLMRunRepository;
 class ProjectRepository;
 
@@ -45,6 +46,7 @@ class ProjectDatabase final {
 
     friend class BookRepository;
     friend class ChapterRepository;
+    friend class InferenceRepository;
     friend class LLMRunRepository;
     friend class ProjectRepository;
 

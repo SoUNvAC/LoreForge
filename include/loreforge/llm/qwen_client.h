@@ -55,6 +55,7 @@ class QwenClient final : public QObject, public ILLMClient {
     QQueue<PendingRequest> queue_;
     std::optional<PendingRequest> active_;
     QNetworkReply* reply_ = nullptr;
+    QByteArray activePayload_;
     QTimer timeoutTimer_;
     QTimer retryTimer_;
     QElapsedTimer requestTimer_;

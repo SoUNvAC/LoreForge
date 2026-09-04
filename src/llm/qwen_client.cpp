@@ -178,7 +178,9 @@ bool QwenClient::cancel(const QUuid& requestId) {
                           false,
                           0,
                           active_->attemptCount,
-                          requestTimer_.isValid() ? requestTimer_.elapsed() : 0});
+                          requestTimer_.isValid() ? requestTimer_.elapsed() : 0,
+                          activePayload_,
+                          {}});
     return true;
 }
 
@@ -216,7 +218,8 @@ void QwenClient::sendAttempt() {
     networkRequest.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
     networkRequest.setRawHeader(QByteArrayLiteral("User-Agent"),
                                 QByteArrayLiteral("LoreForge/0.1"));
-    reply_ = network_.post(networkRequest, requestPayload(active_->request, model));
+    activePayload_ = requestPayload(active_->request, model);
+    reply_ = network_.post(networkRequest, activePayload_);
     connect(reply_, &QNetworkReply::finished, this, &QwenClient::handleReplyFinished);
     timeoutTimer_.start(active_->request.timeoutMs);
 }
@@ -242,13 +245,16 @@ void QwenClient::handleReplyFinished() {
                                true,
                                0,
                                active_->attemptCount,
-                               requestTimer_.elapsed()});
+                               requestTimer_.elapsed(),
+                               activePayload_,
+                               {}});
         return;
     }
     if (httpStatus == 0 && networkError != QNetworkReply::NoError) {
         retryOrFinish(LLMError{LLMErrorCode::Network,
                                QStringLiteral("The Qwen network request failed."), networkErrorText,
-                               true, 0, active_->attemptCount, requestTimer_.elapsed()});
+                               true, 0, active_->attemptCount, requestTimer_.elapsed(),
+                               activePayload_, payload});
         return;
     }
     if (httpStatus < 200 || httpStatus >= 300) {
@@ -257,13 +263,15 @@ void QwenClient::handleReplyFinished() {
                                   : QStringLiteral("Qwen returned HTTP %1.").arg(httpStatus);
         retryOrFinish(LLMError{LLMErrorCode::Http, providerErrorMessage(payload, fallback),
                                QString::fromUtf8(payload), isRetryableHttpStatus(httpStatus),
-                               httpStatus, active_->attemptCount, requestTimer_.elapsed()});
+                               httpStatus, active_->attemptCount, requestTimer_.elapsed(),
+                               activePayload_, payload});
         return;
     }
     if (networkError != QNetworkReply::NoError) {
         retryOrFinish(LLMError{LLMErrorCode::Network,
                                QStringLiteral("The Qwen network request failed."), networkErrorText,
-                               true, httpStatus, active_->attemptCount, requestTimer_.elapsed()});
+                               true, httpStatus, active_->attemptCount, requestTimer_.elapsed(),
+                               activePayload_, payload});
         return;
     }
 
@@ -276,7 +284,7 @@ void QwenClient::handleReplyFinished() {
         finishActive(LLMError{LLMErrorCode::InvalidResponse,
                               QStringLiteral("Qwen returned an invalid response."),
                               parseError.errorString(), false, httpStatus, active_->attemptCount,
-                              requestTimer_.elapsed()});
+                              requestTimer_.elapsed(), activePayload_, payload});
         return;
     }
     const auto choice = choices.first().toObject();
@@ -290,7 +298,9 @@ void QwenClient::handleReplyFinished() {
                               false,
                               httpStatus,
                               active_->attemptCount,
-                              requestTimer_.elapsed()});
+                              requestTimer_.elapsed(),
+                              activePayload_,
+                              payload});
         return;
     }
 
@@ -306,7 +316,9 @@ void QwenClient::handleReplyFinished() {
                                   false,
                                   httpStatus,
                                   active_->attemptCount,
-                                  requestTimer_.elapsed()});
+                                  requestTimer_.elapsed(),
+                                  activePayload_,
+                                  payload});
             return;
         }
         parsedContent = *structured;
@@ -316,7 +328,7 @@ void QwenClient::handleReplyFinished() {
         LLMResponse{object.value(QStringLiteral("id")).toString(),
                     object.value(QStringLiteral("model")).toString(), contentValue.toString(),
                     choice.value(QStringLiteral("finish_reason")).toString(), parsedContent, *usage,
-                    active_->attemptCount, requestTimer_.elapsed()});
+                    active_->attemptCount, requestTimer_.elapsed(), activePayload_, payload});
 }
 
 void QwenClient::handleTimeout() {
@@ -349,6 +361,7 @@ void QwenClient::finishActive(LLMResult result) {
     retryTimer_.stop();
     auto completed = std::move(*active_);
     active_.reset();
+    activePayload_.clear();
     QTimer::singleShot(0, this, &QwenClient::processNext);
     if (completed.completion) {
         completed.completion(completed.id, std::move(result));

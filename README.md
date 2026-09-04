@@ -8,11 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 8 adds an asynchronous LLM transport boundary shared by mock and real clients.
-The Qwen adapter provides a FIFO request queue, per-attempt timeouts, bounded retry,
-explicit cancellation, structured JSON responses, and token usage. SQLite schema v3
-persists LLM run status and transport metrics without storing credentials or implementing
-narrative analysis. The stored-data desktop workspace and all importers remain covered by
+Phase 9 makes model runs inspectable through immutable prompt versions, output-schema
+versions, and context snapshots. The inference contract validates a strict, documented
+subset of JSON Schema Draft 2020-12; SQLite schema v4 preserves the exact raw request,
+raw response, parsed response, and validation result for each run. Credentials remain
+outside the database, and narrative extraction is not yet implemented. The stored-data
+desktop workspace, importers, and asynchronous Qwen transport remain covered by
 deterministic tests.
 
 ## Requirements

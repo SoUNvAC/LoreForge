@@ -27,6 +27,18 @@ struct LLMRunIdTag {
     static constexpr std::string_view prefix = "llmrun";
 };
 
+struct PromptTemplateIdTag {
+    static constexpr std::string_view prefix = "prompt";
+};
+
+struct OutputSchemaIdTag {
+    static constexpr std::string_view prefix = "schema";
+};
+
+struct ContextSnapshotIdTag {
+    static constexpr std::string_view prefix = "snapshot";
+};
+
 template <typename Tag> class Identifier final {
   public:
     Identifier() = default;
@@ -86,5 +98,8 @@ using ProjectId = Identifier<ProjectIdTag>;
 using BookId = Identifier<BookIdTag>;
 using ChapterId = Identifier<ChapterIdTag>;
 using LLMRunId = Identifier<LLMRunIdTag>;
+using PromptTemplateId = Identifier<PromptTemplateIdTag>;
+using OutputSchemaId = Identifier<OutputSchemaIdTag>;
+using ContextSnapshotId = Identifier<ContextSnapshotIdTag>;
 
 } // namespace loreforge::core

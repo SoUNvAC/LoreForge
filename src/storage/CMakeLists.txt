@@ -2,6 +2,7 @@ qt_add_library(
     LoreForgeStorage STATIC
     book_repository.cpp
     chapter_repository.cpp
+    inference_repository.cpp
     llm_run_repository.cpp
     project_database.cpp
     project_repository.cpp
@@ -19,6 +20,7 @@ target_link_libraries(
     LoreForgeStorage
     PUBLIC
         LoreForge::Document
+        LoreForge::Inference
         LoreForge::ProjectOptions
         Qt6::Core
         Qt6::Sql
@@ -32,4 +34,5 @@ qt_add_resources(
         migrations/001_initial.sql
         migrations/002_extraction_confidence.sql
         migrations/003_llm_runs.sql
+        migrations/004_inference_artifacts.sql
 )

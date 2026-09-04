@@ -30,8 +30,14 @@ reimplement word-count or persistence rules.
 Phase 8 introduces `ILLMClient` as the asynchronous model-transport boundary. `QwenClient`
 implements that contract with Qt Network and owns request ordering, timeout, retry,
 cancellation, response decoding, and token accounting. Neither the UI nor narrative code
-depends on Qwen-specific HTTP details. Storage schema v3 records run lifecycle and metrics;
-prompt/schema snapshots and raw payload persistence remain Phase 9 responsibilities.
+depends on Qwen-specific HTTP details. Storage schema v3 records run lifecycle and metrics.
+
+Phase 9 adds the provider-independent `inference` contract below future narrative use cases.
+It owns immutable prompt, output-schema, and context-snapshot types plus deterministic output
+validation. The Qwen transport exposes the exact request and response bytes, while the
+storage adapter owns their durable association with an LLM run in schema v4. This keeps HTTP,
+validation, and persistence responsibilities separate while allowing a completed run to be
+inspected from one stable snapshot.
 
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts

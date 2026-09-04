@@ -191,7 +191,8 @@ void LLMTransportTest::mockAndQwenUseTheSameInterface() {
 
 void LLMTransportTest::sendsStructuredRequestsAndReadsUsage() {
     ScriptedHttpServer server;
-    server.enqueue({200, successResponse(uR"({"name":"Lin"})"_s)});
+    const auto rawResponse = successResponse(uR"({"name":"Lin"})"_s);
+    server.enqueue({200, rawResponse});
     auto client = makeClient(server);
     auto structuredRequest = request();
     structuredRequest.responseFormat = {{u"type"_s, u"json_object"_s}};
@@ -220,6 +221,8 @@ void LLMTransportTest::sendsStructuredRequestsAndReadsUsage() {
     QCOMPARE(payload.value(u"max_completion_tokens"_s).toInt(), 128);
     QCOMPARE(payload.value(u"response_format"_s).toObject().value(u"type"_s).toString(),
              u"json_object"_s);
+    QCOMPARE(response.rawRequest, body);
+    QCOMPARE(response.rawResponse, rawResponse);
 }
 
 void LLMTransportTest::processesRequestsInFifoOrder() {

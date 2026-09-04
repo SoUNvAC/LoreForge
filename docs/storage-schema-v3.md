@@ -19,3 +19,6 @@ state.
 Credentials, prompt content, raw request/response payloads, parsed narrative data, and schema
 versions are not part of v3. Migration application remains transactional, is recorded in
 `schema_migrations`, and is mirrored as SQLite `user_version = 3`.
+
+Schema v4 extends this run history with immutable inference inputs and response artifacts;
+see `storage-schema-v4.md`.
