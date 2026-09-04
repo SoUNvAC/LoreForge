@@ -1,6 +1,7 @@
 qt_add_library(
     LoreForgeParser STATIC
     epub_parser.cpp
+    mobi_parser.cpp
     pdf_parser.cpp
     plain_text_parser.cpp
 )

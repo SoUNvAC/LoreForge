@@ -80,6 +80,21 @@ target_link_libraries(
 )
 add_test(NAME LoreForgePdfParserTests COMMAND LoreForgePdfParserTests)
 
+qt_add_executable(LoreForgeMobiParserTests mobi_parser_test.cpp)
+target_compile_definitions(
+    LoreForgeMobiParserTests
+    PRIVATE LOREFORGE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}/tests"
+)
+target_link_libraries(
+    LoreForgeMobiParserTests
+    PRIVATE
+        LoreForge::Document
+        LoreForge::Parser
+        LoreForge::ProjectOptions
+        Qt6::Test
+)
+add_test(NAME LoreForgeMobiParserTests COMMAND LoreForgeMobiParserTests)
+
 qt_add_executable(
     LoreForgeMainWindowTests
     main_window_test.cpp

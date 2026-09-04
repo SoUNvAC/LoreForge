@@ -8,10 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 5 adds page-aware PDF import with geometric single/two-column reading order, visible
-failure for ambiguous or OCR-only pages, manual correction hooks, extraction confidence,
-and page-text provenance. EPUB 2/3, plain-text import, and SQLite persistence remain covered
-by deterministic round-trip and golden-fixture tests. MOBI and narrative-analysis features
+Phase 6 adds MOBI7 import for unencrypted UTF-8 and Windows-1252 books using either
+uncompressed or PalmDOC-compressed text records. The importer preserves decoded-text
+provenance and fails visibly for encrypted, HUFF/CDIC-compressed, corrupt, and KF8-only
+books. PDF, EPUB 2/3, plain-text import, and SQLite persistence remain covered by
+deterministic round-trip and golden-fixture tests. Narrative-analysis features
 intentionally belong to later phases.
 
 ## Requirements

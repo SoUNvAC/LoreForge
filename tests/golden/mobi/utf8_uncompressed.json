@@ -1,0 +1,23 @@
+{
+  "authors": ["Ada Example"],
+  "chapters": [
+    {
+      "blocks": [
+        {"text": "Arrival", "type": "heading"},
+        {"text": "“Hello,” said Café.", "type": "paragraph"}
+      ],
+      "title": "Arrival"
+    },
+    {
+      "blocks": [
+        {"text": "Return", "type": "heading"},
+        {"text": "", "type": "scene_break"},
+        {"text": "Home — at last.", "type": "paragraph"}
+      ],
+      "title": "Return"
+    }
+  ],
+  "format": "mobi",
+  "language": "en",
+  "title": "Fixture Chronicle"
+}

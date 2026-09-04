@@ -10,3 +10,5 @@ CMakeLists.txt text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.pdf binary
+*.mobi binary
+*.azw binary

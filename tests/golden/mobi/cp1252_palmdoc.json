@@ -1,0 +1,15 @@
+{
+  "authors": ["Renée Writer"],
+  "chapters": [
+    {
+      "blocks": [
+        {"text": "Chapter One", "type": "heading"},
+        {"text": "“Café” — déjà vu.", "type": "paragraph"}
+      ],
+      "title": "Chapter One"
+    }
+  ],
+  "format": "mobi",
+  "language": "fr",
+  "title": "PalmDOC Café"
+}
