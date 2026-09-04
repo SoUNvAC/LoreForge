@@ -8,11 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 6 adds MOBI7 import for unencrypted UTF-8 and Windows-1252 books using either
-uncompressed or PalmDOC-compressed text records. The importer preserves decoded-text
-provenance and fails visibly for encrypted, HUFF/CDIC-compressed, corrupt, and KF8-only
-books. PDF, EPUB 2/3, plain-text import, and SQLite persistence remain covered by
-deterministic round-trip and golden-fixture tests. Narrative-analysis features
+Phase 7 adds a stored-data desktop workspace with a Project Explorer, chapter tree,
+reader, word counts, chapter metadata, status indicators, and source information.
+The UI opens LoreForge SQLite project files and renders repository-loaded domain data;
+loading and metrics stay outside the widgets. TXT, EPUB 2/3, PDF, and MOBI7 importers
+remain independently covered by deterministic fixtures. Narrative-analysis features
 intentionally belong to later phases.
 
 ## Requirements

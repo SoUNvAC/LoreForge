@@ -22,6 +22,11 @@ Phase 3 adds a `storage` adapter beneath use-case/UI code. Its repositories vali
 domain objects, enforce explicit ordering, and apply versioned SQLite migrations; upper
 layers never compensate for stored-data defects.
 
+The Phase 7 desktop UI opens an existing project database through a workspace loader.
+Widgets render the resulting stored project, book, chapter, block, and provenance data.
+Presentation metrics call the shared deterministic text utilities, so widgets do not
+reimplement word-count or persistence rules.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

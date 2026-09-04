@@ -1,13 +1,15 @@
 #pragma once
 
-#include "loreforge/document/document.h"
+#include "project_workspace.h"
 
 #include <QMainWindow>
+#include <QStringView>
 
 #include <optional>
 
 class QLabel;
-class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QTextBrowser;
 
 namespace loreforge::app {
@@ -18,19 +20,32 @@ class MainWindow final : public QMainWindow {
   public:
     explicit MainWindow(QWidget* parent = nullptr);
 
-    void setDocument(const document::Document& document);
+    [[nodiscard]] bool openProjectFile(QStringView filePath);
 
   private slots:
-    void importText();
-    void displayChapter(int row);
+    void chooseProjectFile();
+    void selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* previous);
+    void displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous);
 
   private:
-    [[nodiscard]] qsizetype chapterWordCount(const document::Chapter& chapter) const;
+    void setWorkspace(StoredWorkspace workspace);
+    void clearBookView();
+    void showBook(qsizetype projectIndex, qsizetype bookIndex);
+    void showLoadError(QString message);
+    [[nodiscard]] const document::Document* selectedBook() const;
 
-    QListWidget* chapterList_ = nullptr;
+    QTreeWidget* projectExplorer_ = nullptr;
+    QTreeWidget* chapterTree_ = nullptr;
     QTextBrowser* reader_ = nullptr;
+    QLabel* workspaceStatus_ = nullptr;
     QLabel* documentSummary_ = nullptr;
-    std::optional<document::Document> document_;
+    QLabel* bookMetadata_ = nullptr;
+    QLabel* sourceInfo_ = nullptr;
+    QLabel* chapterMetadata_ = nullptr;
+    QLabel* chapterStatus_ = nullptr;
+    std::optional<StoredWorkspace> workspace_;
+    qsizetype selectedProjectIndex_ = -1;
+    qsizetype selectedBookIndex_ = -1;
 };
 
 } // namespace loreforge::app

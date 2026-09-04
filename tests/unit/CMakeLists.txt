@@ -98,8 +98,6 @@ add_test(NAME LoreForgeMobiParserTests COMMAND LoreForgeMobiParserTests)
 qt_add_executable(
     LoreForgeMainWindowTests
     main_window_test.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/main_window.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/main_window.h
 )
 
 target_include_directories(
@@ -112,8 +110,8 @@ target_include_directories(
 target_link_libraries(
     LoreForgeMainWindowTests
     PRIVATE
-        LoreForge::Parser
-        LoreForge::Text
+        LoreForge::DesktopUi
+        LoreForge::Storage
         LoreForge::ProjectOptions
         Qt6::Test
         Qt6::Widgets
