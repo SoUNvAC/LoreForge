@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QSet>
 
+#include <cmath>
 #include <utility>
 
 namespace loreforge::document {
@@ -85,6 +86,13 @@ DocumentValidationResult validateDocument(const Document& document) {
                 addError(result, DocumentValidationCode::EmptyBlockText,
                          blockPath + QStringLiteral(".text"),
                          QStringLiteral("Only scene-break blocks may have empty text."));
+            }
+            if (block.extractionConfidence.has_value() &&
+                (!std::isfinite(*block.extractionConfidence) || *block.extractionConfidence < 0.0 ||
+                 *block.extractionConfidence > 1.0)) {
+                addError(result, DocumentValidationCode::InvalidExtractionConfidence,
+                         blockPath + QStringLiteral(".extraction_confidence"),
+                         QStringLiteral("Extraction confidence must be between zero and one."));
             }
         }
     }

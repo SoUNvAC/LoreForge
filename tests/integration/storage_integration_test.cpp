@@ -25,6 +25,7 @@ class StorageIntegrationTest final : public QObject {
     void preservesDocumentBytesAcrossReopen();
     void failedBookSaveRollsBackAllTables();
     void migratesAnExistingVersionZeroDatabase();
+    void migratesAnExistingVersionOneDatabase();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -73,7 +74,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 1);
+    QCOMPARE(database->schemaVersion(), 2);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -95,7 +96,8 @@ void StorageIntegrationTest::preservesDocumentBytesAcrossReopen() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const auto databasePath = directory.filePath(QStringLiteral("round-trip.loreforge"));
-    const auto original = loreforge::test::handcraftedDocument();
+    auto original = loreforge::test::handcraftedDocument();
+    original.chapters[0].blocks[1].extractionConfidence = 0.84;
 
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
@@ -163,11 +165,54 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 1);
+    QCOMPARE(database->schemaVersion(), 2);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("INSERT INTO legacy_marker(value) VALUES('preserved')")));
+}
+
+void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(QStringLiteral("version-one.loreforge"));
+    const QStringList schema{
+        QStringLiteral("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY NOT NULL, "
+                       "name TEXT NOT NULL, applied_at TEXT NOT NULL)"),
+        QStringLiteral("CREATE TABLE projects(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, "
+                       "created_at TEXT NOT NULL)"),
+        QStringLiteral(
+            "CREATE TABLE books(id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, "
+            "title TEXT NOT NULL, authors_json TEXT NOT NULL, language TEXT NOT NULL, "
+            "source_format TEXT NOT NULL, source_locator TEXT NOT NULL, source_hash TEXT "
+            "NOT NULL, FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE, "
+            "UNIQUE(project_id, source_locator))"),
+        QStringLiteral(
+            "CREATE TABLE chapters(id TEXT PRIMARY KEY NOT NULL, book_id TEXT NOT NULL, "
+            "chapter_index INTEGER NOT NULL CHECK(chapter_index >= 0), title TEXT NOT NULL, "
+            "FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE, "
+            "UNIQUE(book_id, chapter_index))"),
+        QStringLiteral("CREATE TABLE blocks(chapter_id TEXT NOT NULL, block_index INTEGER NOT NULL "
+                       "CHECK(block_index >= 0), block_type TEXT NOT NULL, text TEXT NOT NULL, "
+                       "source_id TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT "
+                       "NULL, PRIMARY KEY(chapter_id, block_index), FOREIGN KEY(chapter_id) "
+                       "REFERENCES chapters(id) ON DELETE CASCADE)"),
+        QStringLiteral(
+            "CREATE INDEX blocks_source_span ON blocks(source_id, start_byte, end_byte)"),
+        QStringLiteral("INSERT INTO schema_migrations VALUES(1, '001_initial', '2026-09-04')"),
+        QStringLiteral("PRAGMA user_version = 1"),
+    };
+    for (const auto& statement : schema) {
+        QVERIFY(executeRawSql(databasePath, statement));
+    }
+
+    auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
+    auto database = takeDatabase(opened);
+    QCOMPARE(database->schemaVersion(), 2);
+    database.reset();
+    QVERIFY(executeRawSql(databasePath,
+                          QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {

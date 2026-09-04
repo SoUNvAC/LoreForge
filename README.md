@@ -8,17 +8,17 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 4 adds guarded EPUB 2/3 import with OPF spine ordering, EPUB 3 and NCX navigation,
-XHTML block extraction, multi-file chapter mapping, golden fixtures, and byte-level source
-provenance. SQLite persistence and plain-text import remain covered by deterministic
-round-trip and fixture tests. PDF and narrative-analysis features intentionally belong to
-later phases.
+Phase 5 adds page-aware PDF import with geometric single/two-column reading order, visible
+failure for ambiguous or OCR-only pages, manual correction hooks, extraction confidence,
+and page-text provenance. EPUB 2/3, plain-text import, and SQLite persistence remain covered
+by deterministic round-trip and golden-fixture tests. MOBI and narrative-analysis features
+intentionally belong to later phases.
 
 ## Requirements
 
 - CMake 3.25 or newer
 - Visual Studio 2022 with the C++ desktop workload
-- Qt 6.5 or newer for MSVC 2022, including Qt SQL and Qt Test (CI pins Qt 6.8.3)
+- Qt 6.5 or newer for MSVC 2022, including Qt PDF, Qt SQL, and Qt Test (CI pins Qt 6.8.3)
 
 ## Build and test
 

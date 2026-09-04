@@ -25,6 +25,11 @@ void appendInteger(QCryptographicHash& hash, QByteArrayView name, qint64 value) 
     appendField(hash, name, QByteArrayView(encoded));
 }
 
+void appendReal(QCryptographicHash& hash, QByteArrayView name, double value) {
+    const auto encoded = QByteArray::number(value, 'g', 17);
+    appendField(hash, name, QByteArrayView(encoded));
+}
+
 } // namespace
 
 core::ContentHash computeContentHash(const Document& document) {
@@ -54,6 +59,10 @@ core::ContentHash computeContentHash(const Document& document) {
             appendText(hash, QByteArrayView("block.source_id"), block.sourceSpan.sourceId);
             appendInteger(hash, QByteArrayView("block.start_byte"), block.sourceSpan.startByte);
             appendInteger(hash, QByteArrayView("block.end_byte"), block.sourceSpan.endByte);
+            if (block.extractionConfidence.has_value()) {
+                appendReal(hash, QByteArrayView("block.extraction_confidence"),
+                           *block.extractionConfidence);
+            }
         }
     }
 

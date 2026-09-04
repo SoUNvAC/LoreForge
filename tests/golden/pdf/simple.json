@@ -1,0 +1,22 @@
+{
+  "authors": ["Ada Example"],
+  "chapters": [
+    {
+      "blocks": [
+        {"confidence": 0.92, "source": "fixtures/simple.pdf#page=1&layer=extracted-text", "text": "Chapter 1", "type": "heading"},
+        {"confidence": 0.92, "source": "fixtures/simple.pdf#page=1&layer=extracted-text", "text": "The first page begins here.", "type": "paragraph"},
+        {"confidence": 0.92, "source": "fixtures/simple.pdf#page=1&layer=extracted-text", "text": "It keeps a second paragraph.", "type": "paragraph"}
+      ],
+      "title": "Chapter 1"
+    },
+    {
+      "blocks": [
+        {"confidence": 0.92, "source": "fixtures/simple.pdf#page=2&layer=extracted-text", "text": "Chapter 2", "type": "heading"},
+        {"confidence": 0.92, "source": "fixtures/simple.pdf#page=2&layer=extracted-text", "text": "The second page has its own chapter.", "type": "paragraph"}
+      ],
+      "title": "Chapter 2"
+    }
+  ],
+  "language": "en",
+  "title": "Simple PDF Fixture"
+}

@@ -18,6 +18,7 @@ enum class DocumentValidationCode {
     InvalidSourceSpan,
     OverlappingSourceSpan,
     EmptyBlockText,
+    InvalidExtractionConfidence,
 };
 
 struct DocumentValidationError final {

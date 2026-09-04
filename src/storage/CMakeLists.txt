@@ -29,4 +29,5 @@ qt_add_resources(
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/migrations"
     FILES
         migrations/001_initial.sql
+        migrations/002_extraction_confidence.sql
 )

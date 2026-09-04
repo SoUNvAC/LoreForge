@@ -1,0 +1,17 @@
+{
+  "authors": ["LoreForge Tests"],
+  "chapters": [
+    {
+      "blocks": [
+        {"confidence": 0.82, "source": "fixtures/two_column.pdf#page=1&layer=extracted-text", "text": "Chapter 1", "type": "heading"},
+        {"confidence": 0.82, "source": "fixtures/two_column.pdf#page=1&layer=extracted-text", "text": "Left column starts first.", "type": "paragraph"},
+        {"confidence": 0.82, "source": "fixtures/two_column.pdf#page=1&layer=extracted-text", "text": "Left column continues second.", "type": "paragraph"},
+        {"confidence": 0.82, "source": "fixtures/two_column.pdf#page=1&layer=extracted-text", "text": "Right column starts third.", "type": "paragraph"},
+        {"confidence": 0.82, "source": "fixtures/two_column.pdf#page=1&layer=extracted-text", "text": "Right column finishes fourth.", "type": "paragraph"}
+      ],
+      "title": "Chapter 1"
+    }
+  ],
+  "language": "en",
+  "title": "Two Column Fixture"
+}

@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 1;
+constexpr int latestSchemaVersion = 2;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -115,6 +115,61 @@ StorageStatus applyInitialMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyConfidenceMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/002_extraction_confidence.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("The extraction-confidence migration is unavailable."),
+                         migration.errorString(), false);
+    }
+    if (!database.transaction()) {
+        return sqlError(StorageErrorCode::TransactionFailed,
+                        QStringLiteral("Could not start the schema migration transaction."),
+                        database.lastError());
+    }
+    const auto statements = QString::fromUtf8(migration.readAll()).split(QLatin1Char(';'));
+    for (const auto& statement : statements) {
+        if (statement.trimmed().isEmpty()) {
+            continue;
+        }
+        if (const auto status =
+                executeSql(database, statement, StorageErrorCode::MigrationFailed,
+                           QStringLiteral("The extraction-confidence migration failed."));
+            status.has_value()) {
+            database.rollback();
+            return status;
+        }
+    }
+    QSqlQuery recordMigration(database);
+    recordMigration.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(2, ?, ?)"));
+    recordMigration.addBindValue(QStringLiteral("002_extraction_confidence"));
+    recordMigration.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!recordMigration.exec()) {
+        const auto migrationError =
+            sqlError(StorageErrorCode::MigrationFailed,
+                     QStringLiteral("Could not record the extraction-confidence migration."),
+                     recordMigration.lastError());
+        database.rollback();
+        return migrationError;
+    }
+    if (const auto status = executeSql(database, QStringLiteral("PRAGMA user_version = 2"),
+                                       StorageErrorCode::MigrationFailed,
+                                       QStringLiteral("Could not update the schema version."));
+        status.has_value()) {
+        database.rollback();
+        return status;
+    }
+    if (!database.commit()) {
+        const auto commitError = sqlError(StorageErrorCode::TransactionFailed,
+                                          QStringLiteral("Could not commit the schema migration."),
+                                          database.lastError());
+        database.rollback();
+        return commitError;
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -171,6 +226,20 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The project database schema is incomplete."), {}, false);
     }
+    QSqlQuery blockColumns(database);
+    if (!blockColumns.exec(QStringLiteral("PRAGMA table_info(blocks)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The block schema could not be inspected."),
+                        blockColumns.lastError());
+    }
+    QSet<QString> columnNames;
+    while (blockColumns.next()) {
+        columnNames.insert(blockColumns.value(1).toString());
+    }
+    if (!columnNames.contains(QStringLiteral("extraction_confidence"))) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The block schema is incomplete."), {}, false);
+    }
     return std::nullopt;
 }
 
@@ -197,7 +266,7 @@ StorageResult<int> migrate(QSqlDatabase& database) {
     if (std::holds_alternative<StorageError>(recorded)) {
         return std::get<StorageError>(recorded);
     }
-    const auto version = std::get<int>(recorded);
+    auto version = std::get<int>(recorded);
     if (version > latestSchemaVersion) {
         return makeError(StorageErrorCode::UnsupportedSchema,
                          QStringLiteral("This project uses a newer database schema."),
@@ -210,6 +279,13 @@ StorageResult<int> migrate(QSqlDatabase& database) {
         if (const auto status = applyInitialMigration(database); status.has_value()) {
             return *status;
         }
+        version = 1;
+    }
+    if (version == 1) {
+        if (const auto status = applyConfidenceMigration(database); status.has_value()) {
+            return *status;
+        }
+        version = 2;
     }
 
     QSqlQuery userVersion(database);

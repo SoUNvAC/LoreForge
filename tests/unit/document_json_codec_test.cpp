@@ -13,6 +13,7 @@ class DocumentJsonCodecTest final : public QObject {
     void roundTripPreservesDocument();
     void rejectsTamperedContent();
     void rejectsUnsupportedSchema();
+    void preservesOptionalExtractionConfidence();
     void rejectsInvalidDocumentsBeforeEncoding();
 };
 
@@ -58,6 +59,19 @@ void DocumentJsonCodecTest::rejectsUnsupportedSchema() {
     QVERIFY(std::holds_alternative<loreforge::document::DocumentJsonError>(decoded));
     QCOMPARE(std::get<loreforge::document::DocumentJsonError>(decoded).code,
              loreforge::document::DocumentJsonErrorCode::UnsupportedSchema);
+}
+
+void DocumentJsonCodecTest::preservesOptionalExtractionConfidence() {
+    auto original = loreforge::test::handcraftedDocument();
+    original.chapters[0].blocks[1].extractionConfidence = 0.82;
+
+    const auto encoded = loreforge::document::DocumentJsonCodec::encode(original);
+    QVERIFY(std::holds_alternative<QByteArray>(encoded));
+    QVERIFY(std::get<QByteArray>(encoded).contains("\"extraction_confidence\":0.82"));
+    const auto decoded =
+        loreforge::document::DocumentJsonCodec::decode(std::get<QByteArray>(encoded));
+    QVERIFY(std::holds_alternative<loreforge::document::Document>(decoded));
+    QCOMPARE(std::get<loreforge::document::Document>(decoded), original);
 }
 
 void DocumentJsonCodecTest::rejectsInvalidDocumentsBeforeEncoding() {

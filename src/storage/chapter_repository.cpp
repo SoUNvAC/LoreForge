@@ -8,6 +8,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 
+#include <cmath>
 #include <utility>
 #include <variant>
 
@@ -46,8 +47,8 @@ StorageResult<QList<document::Block>> loadBlocks(QSqlDatabase& connection,
                                                  const core::ChapterId& chapterId) {
     QSqlQuery query(connection);
     query.prepare(QStringLiteral(
-        "SELECT block_index, block_type, text, source_id, start_byte, end_byte FROM blocks "
-        "WHERE chapter_id = ? ORDER BY block_index"));
+        "SELECT block_index, block_type, text, source_id, start_byte, end_byte, "
+        "extraction_confidence FROM blocks WHERE chapter_id = ? ORDER BY block_index"));
     query.addBindValue(chapterId.toString());
     if (!query.exec()) {
         return queryError(QStringLiteral("Chapter blocks could not be read."), query.lastError());
@@ -63,14 +64,21 @@ StorageResult<QList<document::Block>> loadBlocks(QSqlDatabase& connection,
         const auto startByte = query.value(4).toLongLong(&startOk);
         const auto endByte = query.value(5).toLongLong(&endOk);
         const core::SourceSpan span{query.value(3).toString(), startByte, endByte};
+        std::optional<double> extractionConfidence;
+        bool confidenceOk = true;
+        if (!query.value(6).isNull()) {
+            extractionConfidence = query.value(6).toDouble(&confidenceOk);
+            confidenceOk = confidenceOk && std::isfinite(*extractionConfidence) &&
+                           *extractionConfidence >= 0.0 && *extractionConfidence <= 1.0;
+        }
         if (!indexOk || blockIndex != blocks.size() || !blockType.has_value() || !startOk ||
-            !endOk || !span.isValid()) {
+            !endOk || !span.isValid() || !confidenceOk) {
             return StorageError{StorageErrorCode::CorruptData,
                                 QStringLiteral("Stored chapter block data is invalid."),
                                 {},
                                 false};
         }
-        blocks.append({*blockType, query.value(2).toString(), span});
+        blocks.append({*blockType, query.value(2).toString(), span, extractionConfidence});
     }
     return blocks;
 }
@@ -106,7 +114,7 @@ ChapterRepository::replaceInCurrentTransaction(const core::BookId& bookId,
     QSqlQuery insertBlock(connection);
     insertBlock.prepare(QStringLiteral(
         "INSERT INTO blocks(chapter_id, block_index, block_type, text, source_id, start_byte, "
-        "end_byte) VALUES(?, ?, ?, ?, ?, ?, ?)"));
+        "end_byte, extraction_confidence) VALUES(?, ?, ?, ?, ?, ?, ?, ?)"));
 
     for (const auto& chapter : chapters) {
         insertChapter.bindValue(0, chapter.id.toString());
@@ -127,6 +135,9 @@ ChapterRepository::replaceInCurrentTransaction(const core::BookId& bookId,
             insertBlock.bindValue(4, block.sourceSpan.sourceId);
             insertBlock.bindValue(5, block.sourceSpan.startByte);
             insertBlock.bindValue(6, block.sourceSpan.endByte);
+            insertBlock.bindValue(7, block.extractionConfidence.has_value()
+                                         ? QVariant(*block.extractionConfidence)
+                                         : QVariant());
             if (!insertBlock.exec()) {
                 return queryError(QStringLiteral("A chapter block could not be stored."),
                                   insertBlock.lastError());

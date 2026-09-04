@@ -111,11 +111,15 @@ QJsonObject sourceSpanToJson(const core::SourceSpan& span) {
 }
 
 QJsonObject blockToJson(const Block& block) {
-    return {
+    QJsonObject object{
         {QStringLiteral("source_span"), sourceSpanToJson(block.sourceSpan)},
         {QStringLiteral("text"), block.text},
         {QStringLiteral("type"), blockTypeToString(block.type)},
     };
+    if (block.extractionConfidence.has_value()) {
+        object.insert(QStringLiteral("extraction_confidence"), *block.extractionConfidence);
+    }
+    return object;
 }
 
 QJsonObject chapterToJson(const Chapter& chapter) {
@@ -199,7 +203,21 @@ std::optional<Block> parseBlock(const QJsonObject& object, const QString& path,
         return std::nullopt;
     }
 
-    return Block{*type, *text, *span};
+    std::optional<double> extractionConfidence;
+    if (object.contains(QStringLiteral("extraction_confidence"))) {
+        const auto value = object.value(QStringLiteral("extraction_confidence"));
+        const auto numeric = value.toDouble(std::numeric_limits<double>::quiet_NaN());
+        if (!value.isDouble() || !std::isfinite(numeric) || numeric < 0.0 || numeric > 1.0) {
+            outputError =
+                error(DocumentJsonErrorCode::InvalidValue,
+                      path + QStringLiteral(".extraction_confidence"),
+                      QStringLiteral("Extraction confidence must be between zero and one."));
+            return std::nullopt;
+        }
+        extractionConfidence = numeric;
+    }
+
+    return Block{*type, *text, *span, extractionConfidence};
 }
 
 std::optional<Chapter> parseChapter(const QJsonObject& object, const QString& path,

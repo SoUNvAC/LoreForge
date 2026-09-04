@@ -15,6 +15,7 @@ class DocumentModelTest final : public QObject {
     void rejectsDuplicateChapterIds();
     void rejectsOverlappingSourceSpans();
     void rejectsSourceSpansOverlappingAcrossChapters();
+    void rejectsInvalidExtractionConfidence();
     void allowsAnEmptyChapter();
 };
 
@@ -73,6 +74,16 @@ void DocumentModelTest::rejectsSourceSpansOverlappingAcrossChapters() {
     QVERIFY(!result.isValid());
     QCOMPARE(result.errors.last().code,
              loreforge::document::DocumentValidationCode::OverlappingSourceSpan);
+}
+
+void DocumentModelTest::rejectsInvalidExtractionConfidence() {
+    auto document = loreforge::test::handcraftedDocument();
+    document.chapters[0].blocks[0].extractionConfidence = 1.01;
+
+    const auto result = loreforge::document::validateDocument(document);
+    QVERIFY(!result.isValid());
+    QCOMPARE(result.errors.last().code,
+             loreforge::document::DocumentValidationCode::InvalidExtractionConfidence);
 }
 
 void DocumentModelTest::allowsAnEmptyChapter() {

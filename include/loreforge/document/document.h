@@ -38,6 +38,7 @@ struct Block final {
     BlockType type = BlockType::Unknown;
     QString text;
     core::SourceSpan sourceSpan;
+    std::optional<double> extractionConfidence;
 
     friend bool operator==(const Block&, const Block&) = default;
 };

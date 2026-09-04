@@ -14,7 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 include(cmake/ProjectOptions.cmake)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Sql Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Pdf Sql Widgets)
 qt_standard_project_setup(REQUIRES 6.5)
 
 add_subdirectory(src)
