@@ -23,6 +23,10 @@ struct ChapterIdTag {
     static constexpr std::string_view prefix = "chapter";
 };
 
+struct LLMRunIdTag {
+    static constexpr std::string_view prefix = "llmrun";
+};
+
 template <typename Tag> class Identifier final {
   public:
     Identifier() = default;
@@ -81,5 +85,6 @@ template <typename Tag> size_t qHash(const Identifier<Tag>& identifier, size_t s
 using ProjectId = Identifier<ProjectIdTag>;
 using BookId = Identifier<BookIdTag>;
 using ChapterId = Identifier<ChapterIdTag>;
+using LLMRunId = Identifier<LLMRunIdTag>;
 
 } // namespace loreforge::core

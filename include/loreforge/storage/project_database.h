@@ -14,6 +14,7 @@ namespace loreforge::storage {
 
 class BookRepository;
 class ChapterRepository;
+class LLMRunRepository;
 class ProjectRepository;
 
 class ProjectDatabase final {
@@ -44,6 +45,7 @@ class ProjectDatabase final {
 
     friend class BookRepository;
     friend class ChapterRepository;
+    friend class LLMRunRepository;
     friend class ProjectRepository;
 
     QString filePath_;

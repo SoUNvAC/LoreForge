@@ -29,6 +29,10 @@ void CoreTypesTest::stableIdentifiersAreDeterministicAndTyped() {
 
     const auto chapter = loreforge::core::ChapterId::fromStableKey(u"fixture/book.txt"_s);
     QVERIFY(chapter.toString().startsWith(u"chapter_"_s));
+
+    const auto llmRun = loreforge::core::LLMRunId::fromStableKey(u"request/fixture"_s);
+    QVERIFY(llmRun.toString().startsWith(u"llmrun_"_s));
+    QCOMPARE(loreforge::core::LLMRunId::fromString(llmRun.toString()), llmRun);
 }
 
 void CoreTypesTest::identifierParsingRejectsMalformedValues() {

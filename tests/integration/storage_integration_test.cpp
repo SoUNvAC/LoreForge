@@ -2,6 +2,7 @@
 
 #include "loreforge/document/document_json_codec.h"
 #include "loreforge/storage/book_repository.h"
+#include "loreforge/storage/llm_run_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/project_repository.h"
 
@@ -26,6 +27,7 @@ class StorageIntegrationTest final : public QObject {
     void failedBookSaveRollsBackAllTables();
     void migratesAnExistingVersionZeroDatabase();
     void migratesAnExistingVersionOneDatabase();
+    void persistsLLMRunsAcrossReopen();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -74,7 +76,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 2);
+    QCOMPARE(database->schemaVersion(), 3);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -165,7 +167,7 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 2);
+    QCOMPARE(database->schemaVersion(), 3);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
@@ -209,10 +211,75 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 2);
+    QCOMPARE(database->schemaVersion(), 3);
     database.reset();
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath, QStringLiteral("SELECT id FROM llm_runs LIMIT 1")));
+}
+
+void StorageIntegrationTest::persistsLLMRunsAcrossReopen() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(QStringLiteral("llm-runs.loreforge"));
+    auto created = loreforge::storage::ProjectDatabase::create(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+
+    const QUuid requestId(QStringLiteral("{23627de9-5cf0-46aa-8f2e-a195e4473b19}"));
+    const auto runId = loreforge::core::LLMRunId::fromStableKey(requestId.toString());
+    loreforge::storage::LLMRunRepository runs(*database);
+    const loreforge::storage::LLMRunRecord queued{
+        runId,
+        projectRecord().id,
+        requestId,
+        QStringLiteral("qwen"),
+        QStringLiteral("qwen-fixture"),
+        loreforge::storage::LLMRunStatus::Queued,
+        0,
+        0,
+        0,
+        0,
+        QDateTime::fromString(QStringLiteral("2026-09-04T01:00:00.000Z"), Qt::ISODateWithMs),
+        std::nullopt,
+        std::nullopt,
+        {},
+        {}};
+    const auto queuedSave = runs.save(queued);
+    QVERIFY2(!queuedSave.has_value(),
+             queuedSave.has_value()
+                 ? qPrintable(queuedSave->message + QLatin1Char(' ') + queuedSave->technicalDetails)
+                 : "");
+
+    auto succeeded = queued;
+    succeeded.status = loreforge::storage::LLMRunStatus::Succeeded;
+    succeeded.attemptCount = 2;
+    succeeded.promptTokens = 120;
+    succeeded.completionTokens = 30;
+    succeeded.totalTokens = 150;
+    succeeded.completedAt =
+        QDateTime::fromString(QStringLiteral("2026-09-04T01:00:01.250Z"), Qt::ISODateWithMs);
+    succeeded.latencyMs = 1'250;
+    const auto succeededSave = runs.save(succeeded);
+    QVERIFY2(!succeededSave.has_value(),
+             succeededSave.has_value() ? qPrintable(succeededSave->message + QLatin1Char(' ') +
+                                                    succeededSave->technicalDetails)
+                                       : "");
+    database.reset();
+
+    auto reopened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(reopened));
+    database = takeDatabase(reopened);
+    loreforge::storage::LLMRunRepository reopenedRuns(*database);
+    const auto loaded = reopenedRuns.find(runId);
+    QVERIFY(std::holds_alternative<loreforge::storage::LLMRunRecord>(loaded));
+    QCOMPARE(std::get<loreforge::storage::LLMRunRecord>(loaded), succeeded);
+    const auto listed = reopenedRuns.listForProject(projectRecord().id);
+    QVERIFY(std::holds_alternative<QList<loreforge::storage::LLMRunRecord>>(listed));
+    QCOMPARE(std::get<QList<loreforge::storage::LLMRunRecord>>(listed),
+             QList<loreforge::storage::LLMRunRecord>{succeeded});
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {

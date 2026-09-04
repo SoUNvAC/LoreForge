@@ -8,18 +8,19 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 7 adds a stored-data desktop workspace with a Project Explorer, chapter tree,
-reader, word counts, chapter metadata, status indicators, and source information.
-The UI opens LoreForge SQLite project files and renders repository-loaded domain data;
-loading and metrics stay outside the widgets. TXT, EPUB 2/3, PDF, and MOBI7 importers
-remain independently covered by deterministic fixtures. Narrative-analysis features
-intentionally belong to later phases.
+Phase 8 adds an asynchronous LLM transport boundary shared by mock and real clients.
+The Qwen adapter provides a FIFO request queue, per-attempt timeouts, bounded retry,
+explicit cancellation, structured JSON responses, and token usage. SQLite schema v3
+persists LLM run status and transport metrics without storing credentials or implementing
+narrative analysis. The stored-data desktop workspace and all importers remain covered by
+deterministic tests.
 
 ## Requirements
 
 - CMake 3.25 or newer
 - Visual Studio 2022 with the C++ desktop workload
-- Qt 6.5 or newer for MSVC 2022, including Qt PDF, Qt SQL, and Qt Test (CI pins Qt 6.8.3)
+- Qt 6.5 or newer for MSVC 2022, including Qt Network, Qt PDF, Qt SQL, and Qt Test
+  (CI pins Qt 6.8.3)
 
 ## Build and test
 

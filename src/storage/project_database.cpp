@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 2;
+constexpr int latestSchemaVersion = 3;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -170,6 +170,59 @@ StorageStatus applyConfidenceMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyLLMRunMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/003_llm_runs.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("The LLM-run migration is unavailable."),
+                         migration.errorString(), false);
+    }
+    if (!database.transaction()) {
+        return sqlError(StorageErrorCode::TransactionFailed,
+                        QStringLiteral("Could not start the schema migration transaction."),
+                        database.lastError());
+    }
+    const auto statements = QString::fromUtf8(migration.readAll()).split(QLatin1Char(';'));
+    for (const auto& statement : statements) {
+        if (statement.trimmed().isEmpty()) {
+            continue;
+        }
+        if (const auto status = executeSql(database, statement, StorageErrorCode::MigrationFailed,
+                                           QStringLiteral("The LLM-run migration failed."));
+            status.has_value()) {
+            database.rollback();
+            return status;
+        }
+    }
+    QSqlQuery recordMigration(database);
+    recordMigration.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(3, ?, ?)"));
+    recordMigration.addBindValue(QStringLiteral("003_llm_runs"));
+    recordMigration.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!recordMigration.exec()) {
+        const auto migrationError = sqlError(
+            StorageErrorCode::MigrationFailed,
+            QStringLiteral("Could not record the LLM-run migration."), recordMigration.lastError());
+        database.rollback();
+        return migrationError;
+    }
+    if (const auto status = executeSql(database, QStringLiteral("PRAGMA user_version = 3"),
+                                       StorageErrorCode::MigrationFailed,
+                                       QStringLiteral("Could not update the schema version."));
+        status.has_value()) {
+        database.rollback();
+        return status;
+    }
+    if (!database.commit()) {
+        const auto commitError = sqlError(StorageErrorCode::TransactionFailed,
+                                          QStringLiteral("Could not commit the schema migration."),
+                                          database.lastError());
+        database.rollback();
+        return commitError;
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -209,7 +262,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery tables(database);
     if (!tables.exec(
             QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
-                           "('schema_migrations', 'projects', 'books', 'chapters', 'blocks')"))) {
+                           "('schema_migrations', 'projects', 'books', 'chapters', 'blocks', "
+                           "'llm_runs')"))) {
         return sqlError(StorageErrorCode::CorruptDatabase,
                         QStringLiteral("The project database schema could not be inspected."),
                         tables.lastError());
@@ -220,7 +274,7 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     }
     const QSet<QString> requiredTables{
         QStringLiteral("schema_migrations"), QStringLiteral("projects"), QStringLiteral("books"),
-        QStringLiteral("chapters"),          QStringLiteral("blocks"),
+        QStringLiteral("chapters"),          QStringLiteral("blocks"),   QStringLiteral("llm_runs"),
     };
     if (presentTables != requiredTables) {
         return makeError(StorageErrorCode::CorruptDatabase,
@@ -239,6 +293,37 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     if (!columnNames.contains(QStringLiteral("extraction_confidence"))) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The block schema is incomplete."), {}, false);
+    }
+    QSqlQuery llmRunColumns(database);
+    if (!llmRunColumns.exec(QStringLiteral("PRAGMA table_info(llm_runs)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The LLM-run schema could not be inspected."),
+                        llmRunColumns.lastError());
+    }
+    QSet<QString> llmRunColumnNames;
+    while (llmRunColumns.next()) {
+        llmRunColumnNames.insert(llmRunColumns.value(1).toString());
+    }
+    const QSet<QString> requiredLLMRunColumns{
+        QStringLiteral("id"),
+        QStringLiteral("project_id"),
+        QStringLiteral("request_id"),
+        QStringLiteral("provider"),
+        QStringLiteral("model"),
+        QStringLiteral("status"),
+        QStringLiteral("attempt_count"),
+        QStringLiteral("prompt_tokens"),
+        QStringLiteral("completion_tokens"),
+        QStringLiteral("total_tokens"),
+        QStringLiteral("started_at"),
+        QStringLiteral("completed_at"),
+        QStringLiteral("latency_ms"),
+        QStringLiteral("error_code"),
+        QStringLiteral("error_message"),
+    };
+    if (llmRunColumnNames != requiredLLMRunColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The LLM-run schema is incomplete."), {}, false);
     }
     return std::nullopt;
 }
@@ -286,6 +371,12 @@ StorageResult<int> migrate(QSqlDatabase& database) {
             return *status;
         }
         version = 2;
+    }
+    if (version == 2) {
+        if (const auto status = applyLLMRunMigration(database); status.has_value()) {
+            return *status;
+        }
+        version = 3;
     }
 
     QSqlQuery userVersion(database);

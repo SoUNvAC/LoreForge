@@ -2,6 +2,7 @@ qt_add_library(
     LoreForgeStorage STATIC
     book_repository.cpp
     chapter_repository.cpp
+    llm_run_repository.cpp
     project_database.cpp
     project_repository.cpp
 )
@@ -30,4 +31,5 @@ qt_add_resources(
     FILES
         migrations/001_initial.sql
         migrations/002_extraction_confidence.sql
+        migrations/003_llm_runs.sql
 )

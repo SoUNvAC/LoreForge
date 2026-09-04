@@ -27,6 +27,12 @@ Widgets render the resulting stored project, book, chapter, block, and provenanc
 Presentation metrics call the shared deterministic text utilities, so widgets do not
 reimplement word-count or persistence rules.
 
+Phase 8 introduces `ILLMClient` as the asynchronous model-transport boundary. `QwenClient`
+implements that contract with Qt Network and owns request ordering, timeout, retry,
+cancellation, response decoding, and token accounting. Neither the UI nor narrative code
+depends on Qwen-specific HTTP details. Storage schema v3 records run lifecycle and metrics;
+prompt/schema snapshots and raw payload persistence remain Phase 9 responsibilities.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

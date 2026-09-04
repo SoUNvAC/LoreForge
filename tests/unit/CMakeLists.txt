@@ -48,6 +48,17 @@ loreforge_add_unit_test(LoreForgeDocumentJsonCodecTests document_json_codec_test
 loreforge_add_unit_test(LoreForgeTextProcessingTests text_processing_test.cpp LoreForge::Text)
 loreforge_add_unit_test(LoreForgePlainTextParserTests plain_text_parser_test.cpp LoreForge::Parser)
 
+qt_add_executable(LoreForgeLlmTransportTests llm_transport_test.cpp)
+target_link_libraries(
+    LoreForgeLlmTransportTests
+    PRIVATE
+        LoreForge::Llm
+        LoreForge::ProjectOptions
+        Qt6::Network
+        Qt6::Test
+)
+add_test(NAME LoreForgeLlmTransportTests COMMAND LoreForgeLlmTransportTests)
+
 qt_add_executable(LoreForgeEpubParserTests epub_parser_test.cpp)
 target_include_directories(LoreForgeEpubParserTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_definitions(
