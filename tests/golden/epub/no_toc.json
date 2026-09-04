@@ -1,0 +1,22 @@
+{
+  "authors": [],
+  "chapters": [
+    {
+      "blocks": [
+        {"source": "one.xhtml", "text": "First File", "type": "heading"},
+        {"source": "one.xhtml", "text": "Alpha.", "type": "paragraph"}
+      ],
+      "title": "First File"
+    },
+    {
+      "blocks": [
+        {"source": "two.xhtml", "text": "Second File", "type": "heading"},
+        {"source": "two.xhtml", "text": "Beta.", "type": "paragraph"}
+      ],
+      "title": "Second File"
+    }
+  ],
+  "format": "epub",
+  "language": "und",
+  "title": "No TOC"
+}

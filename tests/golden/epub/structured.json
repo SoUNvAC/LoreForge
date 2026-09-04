@@ -1,0 +1,33 @@
+{
+  "authors": ["Ada Example"],
+  "chapters": [
+    {
+      "blocks": [
+        {"source": "EPUB/text/part.xhtml", "text": "Arrival", "type": "heading"},
+        {"source": "EPUB/text/part.xhtml", "text": "“Hello,” said Café.", "type": "paragraph"}
+      ],
+      "title": "Arrival"
+    },
+    {
+      "blocks": [
+        {"source": "EPUB/text/part.xhtml", "text": "Discovery", "type": "heading"},
+        {"source": "EPUB/text/part.xhtml", "text": "Read the first note.", "type": "paragraph"},
+        {"source": "EPUB/text/part.xhtml", "text": "Footnote text.", "type": "paragraph"},
+        {"source": "EPUB/text/bridge.xhtml", "text": "The road continues.", "type": "paragraph"},
+        {"source": "EPUB/text/bridge.xhtml", "text": "Map of home Beyond the map.", "type": "paragraph"}
+      ],
+      "title": "Discovery"
+    },
+    {
+      "blocks": [
+        {"source": "EPUB/text/ending.xhtml", "text": "Return", "type": "heading"},
+        {"source": "EPUB/text/ending.xhtml", "text": "", "type": "scene_break"},
+        {"source": "EPUB/text/ending.xhtml", "text": "Home — at last.", "type": "paragraph"}
+      ],
+      "title": "Return"
+    }
+  ],
+  "format": "epub",
+  "language": "en",
+  "title": "Fixture Chronicle"
+}

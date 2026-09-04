@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="book-id">structured-fixture</dc:identifier>
+    <dc:title>Fixture Chronicle</dc:title>
+    <dc:creator>Ada Example</dc:creator>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="part" href="text/part.xhtml" media-type="application/xhtml+xml"/>
+    <item id="bridge" href="text/bridge.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ending" href="text/ending.xhtml" media-type="application/xhtml+xml"/>
+    <item id="map" href="images/map.png" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="part"/>
+    <itemref idref="bridge"/>
+    <itemref idref="ending"/>
+  </spine>
+</package>

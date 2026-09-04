@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <navMap><navPoint id="one"><navLabel><text>旧章</text></navLabel><content src="chapter.xhtml#legacy"/></navPoint></navMap>
+</ncx>

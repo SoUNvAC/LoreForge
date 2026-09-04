@@ -1,5 +1,6 @@
 qt_add_library(
     LoreForgeParser STATIC
+    epub_parser.cpp
     plain_text_parser.cpp
 )
 
@@ -18,4 +19,6 @@ target_link_libraries(
         LoreForge::Text
         LoreForge::ProjectOptions
         Qt6::Core
+    PRIVATE
+        Qt6::CorePrivate
 )

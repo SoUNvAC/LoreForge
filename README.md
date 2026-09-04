@@ -8,17 +8,17 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 3 adds migration-managed SQLite project persistence with typed storage errors,
-transactional project/book/chapter repositories, deterministic document round trips,
-rollback guarantees, and corruption detection. Plain-text import keeps original source
-bytes immutable and every imported block retains its source byte span. EPUB and
-narrative features intentionally belong to later phases.
+Phase 4 adds guarded EPUB 2/3 import with OPF spine ordering, EPUB 3 and NCX navigation,
+XHTML block extraction, multi-file chapter mapping, golden fixtures, and byte-level source
+provenance. SQLite persistence and plain-text import remain covered by deterministic
+round-trip and fixture tests. PDF and narrative-analysis features intentionally belong to
+later phases.
 
 ## Requirements
 
 - CMake 3.25 or newer
 - Visual Studio 2022 with the C++ desktop workload
-- Qt 6.5 or newer for MSVC 2022, including Qt SQL and Qt Test
+- Qt 6.5 or newer for MSVC 2022, including Qt SQL and Qt Test (CI pins Qt 6.8.3)
 
 ## Build and test
 
