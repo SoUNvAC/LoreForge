@@ -58,6 +58,20 @@ target_link_libraries(
 )
 add_test(NAME LoreForgeInferenceContractTests COMMAND LoreForgeInferenceContractTests)
 
+qt_add_executable(LoreForgeNarrativeExtractionTests narrative_extraction_test.cpp)
+target_compile_definitions(
+    LoreForgeNarrativeExtractionTests
+    PRIVATE LOREFORGE_TEST_FIXTURES_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+)
+target_link_libraries(
+    LoreForgeNarrativeExtractionTests
+    PRIVATE
+        LoreForge::Narrative
+        LoreForge::ProjectOptions
+        Qt6::Test
+)
+add_test(NAME LoreForgeNarrativeExtractionTests COMMAND LoreForgeNarrativeExtractionTests)
+
 qt_add_executable(LoreForgeLlmTransportTests llm_transport_test.cpp)
 target_link_libraries(
     LoreForgeLlmTransportTests

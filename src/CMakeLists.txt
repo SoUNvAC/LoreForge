@@ -1,6 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(document)
 add_subdirectory(inference)
+add_subdirectory(narrative)
 add_subdirectory(text)
 add_subdirectory(parser)
 add_subdirectory(llm)

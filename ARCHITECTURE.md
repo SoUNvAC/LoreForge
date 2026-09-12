@@ -39,6 +39,12 @@ storage adapter owns their durable association with an LLM run in schema v4. Thi
 validation, and persistence responsibilities separate while allowing a completed run to be
 inspected from one stable snapshot.
 
+Phase 10 introduces the `narrative` domain module. `DialogueExtractor` consumes structured
+annotations, but never accepts generated segment text: it derives text exclusively from the
+annotated UTF-8 source spans. It rejects gaps, overlaps, out-of-range offsets, character-splitting
+boundaries, invalid confidence, and speaker attribution on narration. `ExtractionEvaluator`
+keeps golden-fixture quality metrics deterministic and independent of model transport.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

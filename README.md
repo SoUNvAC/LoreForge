@@ -8,13 +8,13 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 9 makes model runs inspectable through immutable prompt versions, output-schema
-versions, and context snapshots. The inference contract validates a strict, documented
-subset of JSON Schema Draft 2020-12; SQLite schema v4 preserves the exact raw request,
-raw response, parsed response, and validation result for each run. Credentials remain
-outside the database, and narrative extraction is not yet implemented. The stored-data
-desktop workspace, importers, and asynchronous Qwen transport remain covered by
-deterministic tests.
+Phase 10 adds dialogue/narration segmentation without allowing model output to rewrite source
+text. The narrative contract accepts only segment type, speaker, confidence, and byte
+boundaries; each segment's text is sliced from immutable UTF-8 source. Exact contiguous
+coverage is mandatory, and golden annotated chapters measure coverage, boundary quality,
+speaker correctness, and unknown-speaker handling. Phase 9 inference snapshots, schema v4,
+the stored-data desktop workspace, importers, and asynchronous Qwen transport remain covered
+by deterministic tests.
 
 ## Requirements
 

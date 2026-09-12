@@ -1,0 +1,92 @@
+{
+  "samples": [
+    {
+      "name": "mixed attributed and unknown dialogue",
+      "chapter_key": "fixtures/dialogue/mixed:chapter:0",
+      "source_id": "fixtures/dialogue/mixed.txt",
+      "chapter_start": 1031,
+      "source": "Mara waited.\n\"Are you there?\" Mara asked.\nIvo replied: \"Yes.\"\n\"Then come in.\"\n",
+      "segments": [
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 1031,
+          "source_end": 1044,
+          "confidence": 0.99
+        },
+        {
+          "type": "dialogue",
+          "speaker": "Mara",
+          "source_start": 1044,
+          "source_end": 1060,
+          "confidence": 0.97
+        },
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 1060,
+          "source_end": 1086,
+          "confidence": 0.98
+        },
+        {
+          "type": "dialogue",
+          "speaker": "Ivo",
+          "source_start": 1086,
+          "source_end": 1092,
+          "confidence": 0.96
+        },
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 1092,
+          "source_end": 1093,
+          "confidence": 0.95
+        },
+        {
+          "type": "dialogue",
+          "speaker": null,
+          "source_start": 1093,
+          "source_end": 1108,
+          "confidence": 0.72
+        },
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 1108,
+          "source_end": 1109,
+          "confidence": 0.95
+        }
+      ]
+    },
+    {
+      "name": "unicode narration and unknown dialogue",
+      "chapter_key": "fixtures/dialogue/unicode:chapter:0",
+      "source_id": "fixtures/dialogue/unicode.txt",
+      "chapter_start": 2000,
+      "source": "天亮了。\n“走吧。”\n",
+      "segments": [
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 2000,
+          "source_end": 2013,
+          "confidence": 0.98
+        },
+        {
+          "type": "dialogue",
+          "speaker": null,
+          "source_start": 2013,
+          "source_end": 2028,
+          "confidence": 0.81
+        },
+        {
+          "type": "narration",
+          "speaker": null,
+          "source_start": 2028,
+          "source_end": 2029,
+          "confidence": 0.99
+        }
+      ]
+    }
+  ]
+}

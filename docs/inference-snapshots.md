@@ -1,8 +1,9 @@
 # Inference snapshots
 
 Phase 9 defines a provider-independent record of everything needed to inspect an LLM run
-later. It does not implement narrative extraction or promise that a remote model will return
-identical output when called again.
+later. Phase 10 may consume a stored structured response as narrative annotations, but the
+snapshot itself does not promise that a remote model will return identical output when called
+again.
 
 An inspectable run contains:
 
