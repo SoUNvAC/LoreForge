@@ -32,7 +32,8 @@ std::optional<qint64> offsetValue(const QJsonValue& value) {
 std::optional<QString> decodeUtf8(QByteArrayView bytes) {
     QStringDecoder decoder(QStringDecoder::Utf8);
     QString text = decoder.decode(bytes);
-    if (decoder.hasError()) {
+    const auto roundTrip = text.toUtf8();
+    if (decoder.hasError() || QByteArrayView(roundTrip) != bytes) {
         return std::nullopt;
     }
     return text;

@@ -45,6 +45,13 @@ annotated UTF-8 source spans. It rejects gaps, overlaps, out-of-range offsets, c
 boundaries, invalid confidence, and speaker attribution on narration. `ExtractionEvaluator`
 keeps golden-fixture quality metrics deterministic and independent of model transport.
 
+Phase 11 extends `narrative` with `ChapterAnalyzer`, which converts validated structured output
+into chapter-local characters, aliases, locations, events, a summary, important facts, and open
+threads. Every claim carries confidence and an explicit evidence-or-inference basis. Evidence
+text is reconstructed from immutable source byte spans, so model output cannot invent a quote.
+This layer does not persist facts or resolve identities across chapters; those responsibilities
+belong to the later Story Memory phase.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

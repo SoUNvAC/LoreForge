@@ -8,13 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 10 adds dialogue/narration segmentation without allowing model output to rewrite source
-text. The narrative contract accepts only segment type, speaker, confidence, and byte
-boundaries; each segment's text is sliced from immutable UTF-8 source. Exact contiguous
-coverage is mandatory, and golden annotated chapters measure coverage, boundary quality,
-speaker correctness, and unknown-speaker handling. Phase 9 inference snapshots, schema v4,
-the stored-data desktop workspace, importers, and asynchronous Qwen transport remain covered
-by deterministic tests.
+Phase 11 adds chapter-local semantic analysis for characters, aliases, locations, events,
+summaries, important facts, and open threads. Every direct claim requires source evidence;
+claims without evidence must be explicitly marked inferred. Evidence contains only absolute
+UTF-8 byte offsets, and LoreForge derives its text from the immutable chapter source. Phase 10
+segmentation, Phase 9 inference snapshots, schema v4, the stored-data desktop workspace,
+importers, and asynchronous Qwen transport remain covered by deterministic tests.
 
 ## Requirements
 

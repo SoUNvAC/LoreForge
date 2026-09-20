@@ -1,7 +1,8 @@
 # Dialogue and narration extraction
 
 Phase 10 classifies immutable source text. It does not rewrite the chapter, infer broader
-chapter facts, or update story memory.
+chapter facts, or update story memory. Phase 11 chapter facts use the separate contract in
+`chapter-analysis.md`.
 
 ## Output contract
 

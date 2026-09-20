@@ -72,6 +72,20 @@ target_link_libraries(
 )
 add_test(NAME LoreForgeNarrativeExtractionTests COMMAND LoreForgeNarrativeExtractionTests)
 
+qt_add_executable(LoreForgeChapterAnalysisTests chapter_analysis_test.cpp)
+target_compile_definitions(
+    LoreForgeChapterAnalysisTests
+    PRIVATE LOREFORGE_TEST_FIXTURES_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+)
+target_link_libraries(
+    LoreForgeChapterAnalysisTests
+    PRIVATE
+        LoreForge::Narrative
+        LoreForge::ProjectOptions
+        Qt6::Test
+)
+add_test(NAME LoreForgeChapterAnalysisTests COMMAND LoreForgeChapterAnalysisTests)
+
 qt_add_executable(LoreForgeLlmTransportTests llm_transport_test.cpp)
 target_link_libraries(
     LoreForgeLlmTransportTests

@@ -1,5 +1,7 @@
 qt_add_library(
     LoreForgeNarrative STATIC
+    chapter_analysis.cpp
+    chapter_analyzer.cpp
     dialogue_extractor.cpp
     extraction_evaluator.cpp
     narrative_types.cpp

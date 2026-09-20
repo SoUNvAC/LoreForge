@@ -1,0 +1,107 @@
+{
+  "samples": [
+    {
+      "name": "observatory signal",
+      "chapter_key": "fixtures/analysis/observatory:chapter:0",
+      "source_id": "fixtures/analysis/observatory.txt",
+      "chapter_start": 4000,
+      "source": "Mara entered the observatory with Ivo.\nShe called the old tower \"Starwatch.\"\nA red light began blinking above the sealed door.\nNeither knew who had activated it.\n",
+      "output": {
+        "characters": [
+          {
+            "name": "Mara",
+            "aliases": [
+              {
+                "name": "She",
+                "inferred": true,
+                "confidence": 0.82,
+                "evidence": [
+                  { "source_start": 4039, "source_end": 4042 }
+                ]
+              }
+            ],
+            "inferred": false,
+            "confidence": 0.99,
+            "evidence": [
+              { "source_start": 4000, "source_end": 4004 }
+            ]
+          },
+          {
+            "name": "Ivo",
+            "aliases": [],
+            "inferred": false,
+            "confidence": 0.99,
+            "evidence": [
+              { "source_start": 4034, "source_end": 4037 }
+            ]
+          }
+        ],
+        "locations": [
+          {
+            "name": "observatory",
+            "inferred": false,
+            "confidence": 0.99,
+            "evidence": [
+              { "source_start": 4017, "source_end": 4028 }
+            ]
+          },
+          {
+            "name": "Starwatch",
+            "inferred": false,
+            "confidence": 0.96,
+            "evidence": [
+              { "source_start": 4065, "source_end": 4074 }
+            ]
+          }
+        ],
+        "events": [
+          {
+            "description": "A red light begins blinking above the sealed door.",
+            "participants": [],
+            "location": "Starwatch",
+            "inferred": false,
+            "confidence": 0.97,
+            "evidence": [
+              { "source_start": 4077, "source_end": 4126 }
+            ]
+          }
+        ],
+        "summary": {
+          "text": "Mara and Ivo reach Starwatch, where a red light activates unexpectedly.",
+          "inferred": true,
+          "confidence": 0.91,
+          "evidence": [
+            { "source_start": 4000, "source_end": 4038 },
+            { "source_start": 4077, "source_end": 4126 }
+          ]
+        },
+        "important_facts": [
+          {
+            "text": "The door is sealed.",
+            "inferred": false,
+            "confidence": 0.98,
+            "evidence": [
+              { "source_start": 4114, "source_end": 4125 }
+            ]
+          }
+        ],
+        "open_threads": [
+          {
+            "text": "Who activated the red light?",
+            "inferred": false,
+            "confidence": 0.96,
+            "evidence": [
+              { "source_start": 4127, "source_end": 4161 }
+            ]
+          },
+          {
+            "text": "The activation may have an unseen cause.",
+            "inferred": true,
+            "confidence": 0.55,
+            "evidence": []
+          }
+        ]
+      }
+    }
+  ]
+}
