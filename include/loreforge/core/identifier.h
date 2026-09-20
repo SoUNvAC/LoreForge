@@ -39,6 +39,26 @@ struct ContextSnapshotIdTag {
     static constexpr std::string_view prefix = "snapshot";
 };
 
+struct CharacterMemoryIdTag {
+    static constexpr std::string_view prefix = "character";
+};
+
+struct EventMemoryIdTag {
+    static constexpr std::string_view prefix = "event";
+};
+
+struct RelationshipMemoryIdTag {
+    static constexpr std::string_view prefix = "relationship";
+};
+
+struct OpenThreadMemoryIdTag {
+    static constexpr std::string_view prefix = "thread";
+};
+
+struct StoryStateSnapshotIdTag {
+    static constexpr std::string_view prefix = "story";
+};
+
 template <typename Tag> class Identifier final {
   public:
     Identifier() = default;
@@ -101,5 +121,10 @@ using LLMRunId = Identifier<LLMRunIdTag>;
 using PromptTemplateId = Identifier<PromptTemplateIdTag>;
 using OutputSchemaId = Identifier<OutputSchemaIdTag>;
 using ContextSnapshotId = Identifier<ContextSnapshotIdTag>;
+using CharacterMemoryId = Identifier<CharacterMemoryIdTag>;
+using EventMemoryId = Identifier<EventMemoryIdTag>;
+using RelationshipMemoryId = Identifier<RelationshipMemoryIdTag>;
+using OpenThreadMemoryId = Identifier<OpenThreadMemoryIdTag>;
+using StoryStateSnapshotId = Identifier<StoryStateSnapshotIdTag>;
 
 } // namespace loreforge::core

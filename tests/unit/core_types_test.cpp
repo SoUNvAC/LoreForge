@@ -33,6 +33,19 @@ void CoreTypesTest::stableIdentifiersAreDeterministicAndTyped() {
     const auto llmRun = loreforge::core::LLMRunId::fromStableKey(u"request/fixture"_s);
     QVERIFY(llmRun.toString().startsWith(u"llmrun_"_s));
     QCOMPARE(loreforge::core::LLMRunId::fromString(llmRun.toString()), llmRun);
+
+    const auto character = loreforge::core::CharacterMemoryId::fromStableKey(u"Mara"_s);
+    const auto event = loreforge::core::EventMemoryId::fromStableKey(u"chapter:0:event:0"_s);
+    const auto relationship = loreforge::core::RelationshipMemoryId::fromStableKey(u"Mara:Ivo"_s);
+    const auto openThread =
+        loreforge::core::OpenThreadMemoryId::fromStableKey(u"Who opened the door?"_s);
+    const auto story = loreforge::core::StoryStateSnapshotId::fromStableKey(u"project:chapter:1"_s);
+    QVERIFY(character.toString().startsWith(u"character_"_s));
+    QVERIFY(event.toString().startsWith(u"event_"_s));
+    QVERIFY(relationship.toString().startsWith(u"relationship_"_s));
+    QVERIFY(openThread.toString().startsWith(u"thread_"_s));
+    QVERIFY(story.toString().startsWith(u"story_"_s));
+    QCOMPARE(loreforge::core::StoryStateSnapshotId::fromString(story.toString()), story);
 }
 
 void CoreTypesTest::identifierParsingRejectsMalformedValues() {

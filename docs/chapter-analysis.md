@@ -34,6 +34,5 @@ The analyzer rejects schema violations, chapter mismatches, invalid source spans
 empty or untrimmed text, duplicate names within their local collection, invalid confidence,
 and invalid or duplicate evidence. Any error prevents construction of a `ChapterAnalysis`.
 
-All identities and references in this phase are chapter-local. Cross-chapter identity resolution,
-persistence, timelines, relationships, and deterministic story-state rebuilding are reserved for
-Phase 12 Story Memory.
+All identities and references in this phase are chapter-local. Phase 12 Story Memory persists
+these structured records and applies its separate deterministic cross-chapter rules.

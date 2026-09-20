@@ -17,6 +17,7 @@ class ChapterRepository;
 class InferenceRepository;
 class LLMRunRepository;
 class ProjectRepository;
+class StoryStateRepository;
 
 class ProjectDatabase final {
   public:
@@ -49,6 +50,7 @@ class ProjectDatabase final {
     friend class InferenceRepository;
     friend class LLMRunRepository;
     friend class ProjectRepository;
+    friend class StoryStateRepository;
 
     QString filePath_;
     QString connectionName_;

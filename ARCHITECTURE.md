@@ -52,6 +52,14 @@ text is reconstructed from immutable source byte spans, so model output cannot i
 This layer does not persist facts or resolve identities across chapters; those responsibilities
 belong to the later Story Memory phase.
 
+Phase 12 adds `StoryStateRebuilder` and `StoryStateRepository`. The rebuilder consumes only a
+contiguous sequence of persisted `ChapterMemoryRecord` values and produces deterministic,
+content-addressed character, event, co-participation relationship, timeline, and open-thread
+memory. Exact canonical names merge across chapters; aliases resolve participants only within
+their own chapter and never silently merge global identities. SQLite schema v5 stores both the
+structured chapter inputs and verifiable snapshots, and invalidates dependent snapshots when an
+input record changes. Chat history is not a memory source.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

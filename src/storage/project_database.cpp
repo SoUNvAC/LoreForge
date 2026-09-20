@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 4;
+constexpr int latestSchemaVersion = 5;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -278,6 +278,60 @@ StorageStatus applyInferenceArtifactMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyStoryMemoryMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/005_story_memory.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("The story-memory migration is unavailable."),
+                         migration.errorString(), false);
+    }
+    if (!database.transaction()) {
+        return sqlError(StorageErrorCode::TransactionFailed,
+                        QStringLiteral("Could not start the schema migration transaction."),
+                        database.lastError());
+    }
+    const auto statements = QString::fromUtf8(migration.readAll()).split(QLatin1Char(';'));
+    for (const auto& statement : statements) {
+        if (statement.trimmed().isEmpty()) {
+            continue;
+        }
+        if (const auto status = executeSql(database, statement, StorageErrorCode::MigrationFailed,
+                                           QStringLiteral("The story-memory migration failed."));
+            status.has_value()) {
+            database.rollback();
+            return status;
+        }
+    }
+    QSqlQuery recordMigration(database);
+    recordMigration.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(5, ?, ?)"));
+    recordMigration.addBindValue(QStringLiteral("005_story_memory"));
+    recordMigration.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!recordMigration.exec()) {
+        const auto migrationError =
+            sqlError(StorageErrorCode::MigrationFailed,
+                     QStringLiteral("Could not record the story-memory migration."),
+                     recordMigration.lastError());
+        database.rollback();
+        return migrationError;
+    }
+    if (const auto status = executeSql(database, QStringLiteral("PRAGMA user_version = 5"),
+                                       StorageErrorCode::MigrationFailed,
+                                       QStringLiteral("Could not update the schema version."));
+        status.has_value()) {
+        database.rollback();
+        return status;
+    }
+    if (!database.commit()) {
+        const auto commitError = sqlError(StorageErrorCode::TransactionFailed,
+                                          QStringLiteral("Could not commit the schema migration."),
+                                          database.lastError());
+        database.rollback();
+        return commitError;
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -319,7 +373,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
             QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
                            "('schema_migrations', 'projects', 'books', 'chapters', 'blocks', "
                            "'llm_runs', 'prompt_templates', 'prompt_versions', 'output_schemas', "
-                           "'context_snapshots', 'llm_run_artifacts')"))) {
+                           "'context_snapshots', 'llm_run_artifacts', 'chapter_memory_records', "
+                           "'story_state_snapshots')"))) {
         return sqlError(StorageErrorCode::CorruptDatabase,
                         QStringLiteral("The project database schema could not be inspected."),
                         tables.lastError());
@@ -340,6 +395,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         QStringLiteral("output_schemas"),
         QStringLiteral("context_snapshots"),
         QStringLiteral("llm_run_artifacts"),
+        QStringLiteral("chapter_memory_records"),
+        QStringLiteral("story_state_snapshots"),
     };
     if (presentTables != requiredTables) {
         return makeError(StorageErrorCode::CorruptDatabase,
@@ -417,6 +474,47 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The inference-artifact schema is incomplete."), {}, false);
     }
+    QSqlQuery chapterMemoryColumns(database);
+    if (!chapterMemoryColumns.exec(QStringLiteral("PRAGMA table_info(chapter_memory_records)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The chapter-memory schema could not be inspected."),
+                        chapterMemoryColumns.lastError());
+    }
+    QSet<QString> chapterMemoryColumnNames;
+    while (chapterMemoryColumns.next()) {
+        chapterMemoryColumnNames.insert(chapterMemoryColumns.value(1).toString());
+    }
+    const QSet<QString> requiredChapterMemoryColumns{
+        QStringLiteral("project_id"),    QStringLiteral("chapter_sequence"),
+        QStringLiteral("chapter_id"),    QStringLiteral("analysis_json"),
+        QStringLiteral("analysis_hash"),
+    };
+    if (chapterMemoryColumnNames != requiredChapterMemoryColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The chapter-memory schema is incomplete."), {}, false);
+    }
+    QSqlQuery storyStateColumns(database);
+    if (!storyStateColumns.exec(QStringLiteral("PRAGMA table_info(story_state_snapshots)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The story-state schema could not be inspected."),
+                        storyStateColumns.lastError());
+    }
+    QSet<QString> storyStateColumnNames;
+    while (storyStateColumns.next()) {
+        storyStateColumnNames.insert(storyStateColumns.value(1).toString());
+    }
+    const QSet<QString> requiredStoryStateColumns{
+        QStringLiteral("id"),
+        QStringLiteral("project_id"),
+        QStringLiteral("through_chapter_sequence"),
+        QStringLiteral("source_hash"),
+        QStringLiteral("state_hash"),
+        QStringLiteral("state_json"),
+    };
+    if (storyStateColumnNames != requiredStoryStateColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The story-state schema is incomplete."), {}, false);
+    }
     return std::nullopt;
 }
 
@@ -475,6 +573,12 @@ StorageResult<int> migrate(QSqlDatabase& database) {
             return *status;
         }
         version = 4;
+    }
+    if (version == 4) {
+        if (const auto status = applyStoryMemoryMigration(database); status.has_value()) {
+            return *status;
+        }
+        version = 5;
     }
 
     QSqlQuery userVersion(database);

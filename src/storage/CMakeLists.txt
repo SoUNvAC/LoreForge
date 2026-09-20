@@ -6,6 +6,7 @@ qt_add_library(
     llm_run_repository.cpp
     project_database.cpp
     project_repository.cpp
+    story_state_repository.cpp
 )
 
 add_library(LoreForge::Storage ALIAS LoreForgeStorage)
@@ -21,6 +22,7 @@ target_link_libraries(
     PUBLIC
         LoreForge::Document
         LoreForge::Inference
+        LoreForge::Narrative
         LoreForge::ProjectOptions
         Qt6::Core
         Qt6::Sql
@@ -35,4 +37,5 @@ qt_add_resources(
         migrations/002_extraction_confidence.sql
         migrations/003_llm_runs.sql
         migrations/004_inference_artifacts.sql
+        migrations/005_story_memory.sql
 )

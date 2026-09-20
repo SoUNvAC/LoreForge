@@ -8,12 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 11 adds chapter-local semantic analysis for characters, aliases, locations, events,
-summaries, important facts, and open threads. Every direct claim requires source evidence;
-claims without evidence must be explicitly marked inferred. Evidence contains only absolute
-UTF-8 byte offsets, and LoreForge derives its text from the immutable chapter source. Phase 10
-segmentation, Phase 9 inference snapshots, schema v4, the stored-data desktop workspace,
-importers, and asynchronous Qwen transport remain covered by deterministic tests.
+Phase 12 adds persistent Story Memory. Validated chapter analyses are stored as structured
+records and deterministically rebuilt into character memory, event memory, co-participation
+relationships, a timeline, open threads, and content-addressed story-state snapshots. Snapshot
+inputs come only from persisted records, never previous model chat messages. Schema v5,
+Phase 11 evidence-backed analysis, Phase 10 segmentation, inference snapshots, importers, and
+asynchronous Qwen transport remain covered by deterministic tests.
 
 ## Requirements
 

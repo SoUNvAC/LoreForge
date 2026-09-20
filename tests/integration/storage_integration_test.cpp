@@ -8,6 +8,7 @@
 #include "loreforge/storage/llm_run_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/project_repository.h"
+#include "loreforge/storage/story_state_repository.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -33,6 +34,7 @@ class StorageIntegrationTest final : public QObject {
     void migratesAnExistingVersionOneDatabase();
     void persistsLLMRunsAcrossReopen();
     void preservesInspectableInferenceSnapshotsAcrossReopen();
+    void persistsAndDeterministicallyRebuildsStoryState();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -53,6 +55,34 @@ loreforge::storage::ProjectRecord projectRecord() {
         u"Fixture Project"_s,
         QDateTime::fromString(u"2026-09-04T00:00:00.000Z"_s, Qt::ISODateWithMs),
     };
+}
+
+loreforge::narrative::ChapterMemoryRecord
+memoryRecord(const loreforge::core::ProjectId& projectId,
+             const loreforge::document::Chapter& chapter) {
+    const auto& evidenceBlock = chapter.blocks.at(chapter.index == 0 ? 0 : 1);
+    const loreforge::narrative::ClaimSupport evidenceSupport{
+        loreforge::narrative::ClaimBasis::Evidence,
+        {{evidenceBlock.sourceSpan, evidenceBlock.text}},
+        0.96,
+    };
+    const loreforge::narrative::ClaimSupport inferredSupport{
+        loreforge::narrative::ClaimBasis::Inference, {}, 0.72};
+    loreforge::narrative::ChapterAnalysis analysis;
+    analysis.chapterId = chapter.id;
+    analysis.sourceSpan = {chapter.blocks.first().sourceSpan.sourceId,
+                           chapter.blocks.first().sourceSpan.startByte,
+                           chapter.blocks.last().sourceSpan.endByte};
+    analysis.characters = {{u"Narrator"_s, {}, inferredSupport}};
+    analysis.events = {
+        {chapter.index == 0 ? u"The first chapter begins."_s : u"The second chapter ends."_s,
+         {u"Narrator"_s},
+         std::nullopt,
+         evidenceSupport}};
+    analysis.summary = {chapter.index == 0 ? u"An opening occurs."_s : u"A farewell occurs."_s,
+                        inferredSupport};
+    analysis.openThreads = {{u"What happens next?"_s, inferredSupport}};
+    return {projectId, chapter.index, std::move(analysis)};
 }
 
 bool executeRawSql(const QString& databasePath, const QString& sql) {
@@ -81,7 +111,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 4);
+    QCOMPARE(database->schemaVersion(), 5);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -172,7 +202,7 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 4);
+    QCOMPARE(database->schemaVersion(), 5);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
@@ -216,13 +246,17 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 4);
+    QCOMPARE(database->schemaVersion(), 5);
     database.reset();
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));
     QVERIFY(executeRawSql(databasePath, QStringLiteral("SELECT id FROM llm_runs LIMIT 1")));
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT run_id FROM llm_run_artifacts LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath,
+                          QStringLiteral("SELECT chapter_id FROM chapter_memory_records LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath,
+                          QStringLiteral("SELECT id FROM story_state_snapshots LIMIT 1")));
 }
 
 void StorageIntegrationTest::persistsLLMRunsAcrossReopen() {
@@ -384,6 +418,59 @@ void StorageIntegrationTest::preservesInspectableInferenceSnapshotsAcrossReopen(
     QVERIFY(snapshot.runArtifacts.parsedResponse.has_value());
     QCOMPARE(*snapshot.runArtifacts.parsedResponse, parsedResponse);
     QCOMPARE(snapshot.runArtifacts.validation, validation);
+}
+
+void StorageIntegrationTest::persistsAndDeterministicallyRebuildsStoryState() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(QStringLiteral("story-memory.loreforge"));
+    auto created = loreforge::storage::ProjectDatabase::create(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+    const auto document = loreforge::test::handcraftedDocument();
+    loreforge::storage::BookRepository books(*database);
+    QVERIFY(!books.saveDocument(projectRecord().id, document).has_value());
+
+    loreforge::storage::StoryStateRepository memory(*database);
+    const auto first = memoryRecord(projectRecord().id, document.chapters.at(0));
+    const auto second = memoryRecord(projectRecord().id, document.chapters.at(1));
+    QVERIFY(!memory.saveChapterRecord(second).has_value());
+    QVERIFY(!memory.saveChapterRecord(first).has_value());
+    const auto rebuilt = memory.rebuildAndSave(projectRecord().id, 1);
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(rebuilt));
+    const auto expected = std::get<loreforge::narrative::StoryStateSnapshot>(rebuilt);
+    const QList<loreforge::core::ChapterId> expectedChapters{document.chapters.at(0).id,
+                                                             document.chapters.at(1).id};
+    QCOMPARE(expected.sourceChapters, expectedChapters);
+    QCOMPARE(expected.characters.size(), 1);
+    QCOMPARE(expected.events.size(), 2);
+    QCOMPARE(expected.timeline.size(), 2);
+    QCOMPARE(expected.openThreads.size(), 1);
+    database.reset();
+
+    auto reopened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(reopened));
+    database = takeDatabase(reopened);
+    loreforge::storage::StoryStateRepository reopenedMemory(*database);
+    const auto loaded = reopenedMemory.loadSnapshot(projectRecord().id, 1);
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(loaded));
+    QCOMPARE(std::get<loreforge::narrative::StoryStateSnapshot>(loaded), expected);
+
+    auto changed = first;
+    changed.analysis.summary.text = u"A changed opening occurs."_s;
+    QVERIFY(!reopenedMemory.saveChapterRecord(changed).has_value());
+    const auto invalidated = reopenedMemory.loadSnapshot(projectRecord().id, 1);
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(invalidated));
+    QCOMPARE(std::get<loreforge::storage::StorageError>(invalidated).code,
+             loreforge::storage::StorageErrorCode::NotFound);
+    const auto rebuiltAgain = reopenedMemory.rebuildAndSave(projectRecord().id, 1);
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(rebuiltAgain));
+    const auto& changedSnapshot = std::get<loreforge::narrative::StoryStateSnapshot>(rebuiltAgain);
+    QVERIFY(changedSnapshot.sourceHash != expected.sourceHash);
+    QVERIFY(changedSnapshot.stateHash == expected.stateHash);
+    QVERIFY(changedSnapshot.id != expected.id);
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {
