@@ -96,6 +96,16 @@ target_link_libraries(
 )
 add_test(NAME LoreForgeStoryMemoryTests COMMAND LoreForgeStoryMemoryTests)
 
+qt_add_executable(LoreForgeContextEngineTests context_engine_test.cpp)
+target_link_libraries(
+    LoreForgeContextEngineTests
+    PRIVATE
+        LoreForge::Context
+        LoreForge::ProjectOptions
+        Qt6::Test
+)
+add_test(NAME LoreForgeContextEngineTests COMMAND LoreForgeContextEngineTests)
+
 qt_add_executable(LoreForgeLlmTransportTests llm_transport_test.cpp)
 target_link_libraries(
     LoreForgeLlmTransportTests

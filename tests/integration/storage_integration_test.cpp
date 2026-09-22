@@ -1,5 +1,6 @@
 #include "document_fixture.h"
 
+#include "loreforge/context/context_engine.h"
 #include "loreforge/document/document_json_codec.h"
 #include "loreforge/inference/inference_types.h"
 #include "loreforge/inference/output_validator.h"
@@ -35,6 +36,7 @@ class StorageIntegrationTest final : public QObject {
     void persistsLLMRunsAcrossReopen();
     void preservesInspectableInferenceSnapshotsAcrossReopen();
     void persistsAndDeterministicallyRebuildsStoryState();
+    void storesContextBeforeProducingBoundRequest();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -471,6 +473,73 @@ void StorageIntegrationTest::persistsAndDeterministicallyRebuildsStoryState() {
     QVERIFY(changedSnapshot.sourceHash != expected.sourceHash);
     QVERIFY(changedSnapshot.stateHash == expected.stateHash);
     QVERIFY(changedSnapshot.id != expected.id);
+}
+
+void StorageIntegrationTest::storesContextBeforeProducingBoundRequest() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    auto created = loreforge::storage::ProjectDatabase::create(
+        directory.filePath(QStringLiteral("bounded-context.loreforge")));
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+    const auto document = loreforge::test::handcraftedDocument();
+    loreforge::storage::BookRepository books(*database);
+    QVERIFY(!books.saveDocument(projectRecord().id, document).has_value());
+
+    loreforge::storage::StoryStateRepository memory(*database);
+    QVERIFY(!memory.saveChapterRecord(memoryRecord(projectRecord().id, document.chapters.at(0)))
+                 .has_value());
+    const auto rebuilt = memory.rebuildAndSave(projectRecord().id, 0);
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(rebuilt));
+
+    loreforge::storage::InferenceRepository inference(*database);
+    loreforge::context::ContextEngine engine(inference);
+    const QJsonObject schema{
+        {u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
+        {u"type"_s, u"object"_s},
+        {u"required"_s, QJsonArray{u"answer"_s}},
+        {u"properties"_s, QJsonObject{{u"answer"_s, QJsonObject{{u"type"_s, u"string"_s}}}}},
+        {u"additionalProperties"_s, false},
+    };
+    const loreforge::context::ContextBuildInput input{
+        projectRecord().id,
+        std::get<loreforge::narrative::StoryStateSnapshot>(rebuilt),
+        u"Use only the supplied context."_s,
+        u"A compact fixture story."_s,
+        {u"LoreForge"_s},
+        u"The opening has occurred."_s,
+        u"The narrator waits for an answer."_s,
+        u"Return the most relevant fact."_s,
+        schema,
+    };
+    const loreforge::context::ContextBudget budget{2'000, 300};
+    const auto first = engine.prepareAndStore(
+        input, budget, QDateTime::fromString(u"2026-09-22T02:00:00.000Z"_s, Qt::ISODateWithMs));
+    QVERIFY(std::holds_alternative<loreforge::context::BuiltContext>(first));
+    const auto& firstContext = std::get<loreforge::context::BuiltContext>(first);
+    const auto second = engine.prepareAndStore(
+        input, budget, QDateTime::fromString(u"2026-09-22T03:00:00.000Z"_s, Qt::ISODateWithMs));
+    QVERIFY(std::holds_alternative<loreforge::context::BuiltContext>(second));
+    QCOMPARE(std::get<loreforge::context::BuiltContext>(second).snapshot, firstContext.snapshot);
+
+    loreforge::llm::LLMRequest request;
+    request.model = u"qwen-fixture"_s;
+    const auto bound = engine.requestFromStoredSnapshot(firstContext.snapshot.id, request);
+    QVERIFY(std::holds_alternative<loreforge::context::StoredContextRequest>(bound));
+    const auto& storedRequest = std::get<loreforge::context::StoredContextRequest>(bound);
+    QCOMPARE(storedRequest.snapshot.id, firstContext.snapshot.id);
+    QCOMPARE(storedRequest.request.messages.size(), 2);
+    QCOMPARE(storedRequest.request.messages.first().role, loreforge::llm::LLMRole::System);
+    QCOMPARE(storedRequest.request.maxCompletionTokens, budget.reservedCompletionTokens);
+    QCOMPARE(storedRequest.request.responseFormat.value(u"type"_s).toString(), u"json_schema"_s);
+
+    const auto missing = engine.requestFromStoredSnapshot(
+        loreforge::core::ContextSnapshotId::fromStableKey(u"not-stored"_s), request);
+    QVERIFY(std::holds_alternative<loreforge::context::ContextOperationError>(missing));
+    QCOMPARE(std::get<loreforge::context::ContextOperationError>(missing).code,
+             loreforge::context::ContextOperationErrorCode::StorageFailed);
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {

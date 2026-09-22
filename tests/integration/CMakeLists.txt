@@ -67,6 +67,7 @@ target_include_directories(
 target_link_libraries(
     LoreForgeStorageIntegrationTests
     PRIVATE
+        LoreForge::Context
         LoreForge::Document
         LoreForge::Storage
         LoreForge::ProjectOptions

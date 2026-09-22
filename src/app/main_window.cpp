@@ -1,9 +1,11 @@
 #include "main_window.h"
 
+#include "context_inspector.h"
 #include "document_metrics.h"
 #include "loreforge/storage/project_database.h"
 
 #include <QAction>
+#include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -76,6 +78,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::chooseProjectFile);
     menuBar()->addMenu(tr("&File"))->addAction(openAction);
+    auto* viewMenu = menuBar()->addMenu(tr("&View"));
 
     auto* central = new QWidget(this);
     auto* centralLayout = new QVBoxLayout(central);
@@ -147,10 +150,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     centralLayout->addWidget(splitter, 1);
     setCentralWidget(central);
 
+    contextInspector_ = new ContextInspectorWidget(this);
+    auto* contextDock = new QDockWidget(tr("Context Inspector"), this);
+    contextDock->setObjectName(QStringLiteral("contextInspectorDock"));
+    contextDock->setWidget(contextInspector_);
+    contextDock->setMinimumWidth(360);
+    addDockWidget(Qt::RightDockWidgetArea, contextDock);
+    viewMenu->addAction(contextDock->toggleViewAction());
+
     connect(projectExplorer_, &QTreeWidget::currentItemChanged, this,
             &MainWindow::selectProjectItem);
     connect(chapterTree_, &QTreeWidget::currentItemChanged, this, &MainWindow::displayChapter);
     statusBar()->showMessage(tr("Ready"));
+}
+
+void MainWindow::inspectContext(const context::ContextInspectorData& context) {
+    contextInspector_->inspect(context);
 }
 
 bool MainWindow::openProjectFile(QStringView filePath) {

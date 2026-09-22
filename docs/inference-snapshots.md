@@ -21,6 +21,13 @@ be finalized once as `valid`, `invalid`, or `unavailable`. Finalization recomput
 against the stored schema when parsed JSON exists. `InferenceRepository::inspectRun` restores
 the complete prompt, schema, context, raw payloads, parsed output, and validation result.
 
+Phase 13 defines the specialized `loreforge-context-v1` content shape. It records the linked
+Story Memory snapshot hashes, every rendered prompt section, the output schema, total and
+reserved token budgets, the deterministic estimate, omission counts, and the exact system/user
+prompt. `ContextEngine` stores this snapshot before it will construct a production request;
+request messages and structured-output settings are restored from the stored snapshot rather
+than accepted from an ad hoc caller.
+
 ## Supported output-schema subset
 
 Schemas use the JSON Schema Draft 2020-12 vocabulary, limited deliberately to:

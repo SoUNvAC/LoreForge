@@ -3,6 +3,7 @@ qt_add_library(
     chapter_heading_detector.cpp
     paragraph_detector.cpp
     text_normalizer.cpp
+    token_estimator.cpp
     word_counter.cpp
 )
 

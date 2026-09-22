@@ -2,6 +2,8 @@ qt_add_library(
     LoreForgeDesktopUi STATIC
     document_metrics.cpp
     document_metrics.h
+    context_inspector.cpp
+    context_inspector.h
     main_window.cpp
     main_window.h
     project_workspace.cpp
@@ -20,6 +22,7 @@ target_link_libraries(
     LoreForgeDesktopUi
     PUBLIC
         LoreForge::Storage
+        LoreForge::Context
         LoreForge::Text
         LoreForge::ProjectOptions
         Qt6::Widgets

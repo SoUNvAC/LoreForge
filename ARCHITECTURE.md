@@ -60,6 +60,14 @@ their own chapter and never silently merge global identities. SQLite schema v5 s
 structured chapter inputs and verifiable snapshots, and invalidates dependent snapshots when an
 input record changes. Chat history is not a memory source.
 
+Phase 13 adds the provider-neutral `context` module between narrative state and model transport.
+`ContextBuilder` renders mandatory project/task sections, ranks individual Story Memory entries,
+and admits each only while the prompt remains inside `ContextBudget`. The deterministic token
+estimate is planning data; provider usage remains authoritative. `ContextEngine` persists the
+content-addressed `loreforge-context-v1` snapshot before reconstructing a production
+`LLMRequest` from its stored ID. The UI can display the same validated snapshot through the
+Context Inspector, while `ILLMClient` remains only a generic transport boundary.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

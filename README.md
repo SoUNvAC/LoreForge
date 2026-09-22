@@ -8,12 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 12 adds persistent Story Memory. Validated chapter analyses are stored as structured
-records and deterministically rebuilt into character memory, event memory, co-participation
-relationships, a timeline, open threads, and content-addressed story-state snapshots. Snapshot
-inputs come only from persisted records, never previous model chat messages. Schema v5,
-Phase 11 evidence-backed analysis, Phase 10 segmentation, inference snapshots, importers, and
-asynchronous Qwen transport remain covered by deterministic tests.
+Phase 13 adds a bounded Context Engine. It deterministically ranks relevant Story Memory,
+reserves completion capacity, omits low-priority memory when necessary, and stores the exact
+inspectable prompt before a production request can be created. The desktop Context Inspector
+shows every rendered section, token estimates, omissions, and the raw final prompt. Schema v5,
+persistent Story Memory, evidence-backed analysis, segmentation, inference snapshots, importers,
+and asynchronous Qwen transport remain covered by deterministic tests.
 
 ## Requirements
 

@@ -6,7 +6,9 @@
 #include "loreforge/storage/project_repository.h"
 
 #include <QAction>
+#include <QDockWidget>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTreeWidget>
@@ -23,6 +25,7 @@ class MainWindowTest final : public QObject {
   private slots:
     void displaysStoredWorkspaceWithoutReorderingDomainData();
     void reportsProjectOpenFailuresInTheInterface();
+    void rendersInspectableContext();
 };
 
 namespace {
@@ -140,6 +143,50 @@ void MainWindowTest::reportsProjectOpenFailuresInTheInterface() {
     QVERIFY(workspaceStatus != nullptr);
     QCOMPARE(projectExplorer->topLevelItemCount(), 0);
     QVERIFY(workspaceStatus->text().startsWith(QStringLiteral("Open failed:")));
+}
+
+void MainWindowTest::rendersInspectableContext() {
+    loreforge::app::MainWindow window;
+    const QJsonObject schema{
+        {u"type"_s, u"object"_s},
+        {u"properties"_s, QJsonObject{{u"answer"_s, QJsonObject{{u"type"_s, u"string"_s}}}}},
+    };
+    const loreforge::context::ContextInspectorData context{
+        u"Use evidence."_s,
+        u"A city at night."_s,
+        {u"Starwatch"_s},
+        {u"Mara | alias: Captain"_s},
+        {u"Chapter 1: Mara arrived."_s},
+        {u"Who opened the gate?"_s},
+        u"Mara reached the city."_s,
+        u"She hears a sound."_s,
+        u"Return one fact."_s,
+        schema,
+        {1'000, 200},
+        321,
+        1,
+        2,
+        3,
+        u"[CURRENT CHAPTER]\nShe hears a sound."_s,
+        u"SYSTEM:\nUse evidence.\n\nUSER:\n[CURRENT CHAPTER]\nShe hears a sound."_s,
+    };
+
+    window.inspectContext(context);
+
+    auto* dock = window.findChild<QDockWidget*>(u"contextInspectorDock"_s);
+    auto* sections = window.findChild<QTextBrowser*>(u"contextInspectorSections"_s);
+    auto* rawPrompt = window.findChild<QPlainTextEdit*>(u"contextRawPrompt"_s);
+    QVERIFY(dock != nullptr);
+    QVERIFY(sections != nullptr);
+    QVERIFY(rawPrompt != nullptr);
+    const auto rendered = sections->toPlainText();
+    QVERIFY(rendered.contains(u"System Rules"_s));
+    QVERIFY(rendered.contains(u"Character Memory"_s));
+    QVERIFY(rendered.contains(u"Mara"_s));
+    QVERIFY(rendered.contains(u"Current Chapter"_s));
+    QVERIFY(rendered.contains(u"Estimated: 321"_s));
+    QVERIFY(rendered.contains(u"1 characters, 2 events, 3 open threads"_s));
+    QCOMPARE(rawPrompt->toPlainText(), context.rawFinalPrompt);
 }
 
 QTEST_MAIN(MainWindowTest)

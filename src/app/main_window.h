@@ -2,6 +2,8 @@
 
 #include "project_workspace.h"
 
+#include "loreforge/context/context_types.h"
+
 #include <QMainWindow>
 #include <QStringView>
 
@@ -14,6 +16,8 @@ class QTextBrowser;
 
 namespace loreforge::app {
 
+class ContextInspectorWidget;
+
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 
@@ -21,6 +25,7 @@ class MainWindow final : public QMainWindow {
     explicit MainWindow(QWidget* parent = nullptr);
 
     [[nodiscard]] bool openProjectFile(QStringView filePath);
+    void inspectContext(const context::ContextInspectorData& context);
 
   private slots:
     void chooseProjectFile();
@@ -43,6 +48,7 @@ class MainWindow final : public QMainWindow {
     QLabel* sourceInfo_ = nullptr;
     QLabel* chapterMetadata_ = nullptr;
     QLabel* chapterStatus_ = nullptr;
+    ContextInspectorWidget* contextInspector_ = nullptr;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;
