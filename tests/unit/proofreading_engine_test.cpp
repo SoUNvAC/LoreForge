@@ -1,6 +1,7 @@
 #include "loreforge/inference/output_validator.h"
 #include "loreforge/proofreading/deterministic_proofreader.h"
 #include "loreforge/proofreading/protected_term_registry.h"
+#include "loreforge/proofreading/repair_queue.h"
 #include "loreforge/proofreading/semantic_proofreader.h"
 
 #include <QJsonArray>
@@ -19,6 +20,7 @@ class ProofreadingEngineTest final : public QObject {
     void rejectsSourcesWithoutExactUtf8Provenance();
     void validatesSemanticCandidatesAgainstSource();
     void rejectsSemanticChangesToProtectedTermsAndBrokenBoundaries();
+    void requiresHumanApprovalOrExplicitManualAuthorization();
 };
 
 namespace {
@@ -30,6 +32,24 @@ loreforge::proofreading::ProofreadingSource source(QString text, qint64 start = 
         {u"novel/chapter-0.txt"_s, start, start + bytes.size()},
         bytes,
         loreforge::core::ContentHash::sha256(bytes),
+    };
+}
+
+loreforge::proofreading::ProofreadingCandidate
+candidateFor(const loreforge::proofreading::ProofreadingSource& input) {
+    return {
+        loreforge::core::ProofreadingCandidateId::fromStableKey(u"repair:candidate:0"_s),
+        input.chapterId,
+        {input.sourceSpan.sourceId, input.sourceSpan.startByte, input.sourceSpan.startByte + 4},
+        u"walk"_s,
+        u"walks"_s,
+        loreforge::proofreading::CandidateCategory::Typo,
+        0.88,
+        u"The verb form disagrees with the subject."_s,
+        loreforge::proofreading::SemanticImpact::ActionChange,
+        loreforge::proofreading::CandidateOrigin::Semantic,
+        u"semantic-proofreader-v1"_s,
+        input.sourceHash,
     };
 }
 
@@ -190,6 +210,44 @@ void ProofreadingEngineTest::rejectsSemanticChangesToProtectedTermsAndBrokenBoun
     QVERIFY(!brokenResult.isValid());
     QVERIFY(
         hasError(brokenResult, loreforge::proofreading::ProofreadingErrorCode::InvalidCandidate));
+}
+
+void ProofreadingEngineTest::requiresHumanApprovalOrExplicitManualAuthorization() {
+    const auto input = source(u"Mara walk home."_s, 50);
+    const auto now = QDateTime::fromString(u"2026-10-04T08:00:00.000Z"_s, Qt::ISODateWithMs);
+    const auto reviewed = loreforge::proofreading::RepairQueueWorkflow::review(
+        loreforge::core::ProjectId::fromStableKey(u"repair:project"_s), candidateFor(input),
+        u"Mara walk home."_s, now);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(reviewed));
+    const auto pending = std::get<loreforge::proofreading::RepairQueueItem>(reviewed);
+    QCOMPARE(pending.status, loreforge::proofreading::CandidateStatus::ReviewRequired);
+
+    const auto denied = loreforge::proofreading::RepairGate::authorizeApprovedCandidate(pending);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueError>(denied));
+    const auto edited = loreforge::proofreading::RepairQueueWorkflow::editSuggestion(
+        pending, u"walked"_s, now.addSecs(1));
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(edited));
+    const auto approved = loreforge::proofreading::RepairQueueWorkflow::approve(
+        std::get<loreforge::proofreading::RepairQueueItem>(edited), now.addSecs(2));
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(approved));
+    const auto authorization = loreforge::proofreading::RepairGate::authorizeApprovedCandidate(
+        std::get<loreforge::proofreading::RepairQueueItem>(approved));
+    QVERIFY(std::holds_alternative<loreforge::proofreading::PatchAuthorization>(authorization));
+    const auto& patch = std::get<loreforge::proofreading::PatchAuthorization>(authorization);
+    QCOMPARE(patch.origin, loreforge::proofreading::PatchOrigin::ApprovedCandidate);
+    QCOMPARE(patch.replacementText, u"walked"_s);
+    QVERIFY(patch.candidateId.has_value());
+
+    const auto unaccountedManual = loreforge::proofreading::RepairGate::authorizeManualEdit(
+        input.chapterId, candidateFor(input).sourceSpan, u"walk"_s, u"walked"_s, input.sourceHash,
+        {});
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueError>(unaccountedManual));
+    const auto manual = loreforge::proofreading::RepairGate::authorizeManualEdit(
+        input.chapterId, candidateFor(input).sourceSpan, u"walk"_s, u"walked"_s, input.sourceHash,
+        u"Author requested tense change"_s);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::PatchAuthorization>(manual));
+    QCOMPARE(std::get<loreforge::proofreading::PatchAuthorization>(manual).origin,
+             loreforge::proofreading::PatchOrigin::ExplicitManualEdit);
 }
 
 QTEST_GUILESS_MAIN(ProofreadingEngineTest)

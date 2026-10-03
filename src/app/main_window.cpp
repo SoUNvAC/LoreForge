@@ -3,6 +3,8 @@
 #include "context_inspector.h"
 #include "document_metrics.h"
 #include "loreforge/storage/project_database.h"
+#include "loreforge/storage/repair_queue_repository.h"
+#include "repair_queue_widget.h"
 
 #include <QAction>
 #include <QDockWidget>
@@ -158,6 +160,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     addDockWidget(Qt::RightDockWidgetArea, contextDock);
     viewMenu->addAction(contextDock->toggleViewAction());
 
+    repairQueue_ = new RepairQueueWidget(this);
+    auto* repairDock = new QDockWidget(tr("Repair Queue"), this);
+    repairDock->setObjectName(QStringLiteral("repairQueueDock"));
+    repairDock->setWidget(repairQueue_);
+    repairDock->setMinimumWidth(440);
+    addDockWidget(Qt::BottomDockWidgetArea, repairDock);
+    viewMenu->addAction(repairDock->toggleViewAction());
+    connect(repairQueue_, &RepairQueueWidget::candidateApproved, this,
+            &MainWindow::approveRepairCandidate);
+    connect(repairQueue_, &RepairQueueWidget::candidateRejected, this,
+            &MainWindow::rejectRepairCandidate);
+    connect(repairQueue_, &RepairQueueWidget::suggestionEdited, this,
+            &MainWindow::editRepairSuggestion);
+    connect(repairQueue_, &RepairQueueWidget::termProtectionRequested, this,
+            &MainWindow::protectRepairTerm);
+
     connect(projectExplorer_, &QTreeWidget::currentItemChanged, this,
             &MainWindow::selectProjectItem);
     connect(chapterTree_, &QTreeWidget::currentItemChanged, this, &MainWindow::displayChapter);
@@ -166,6 +184,126 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 void MainWindow::inspectContext(const context::ContextInspectorData& context) {
     contextInspector_->inspect(context);
+}
+
+void MainWindow::inspectRepairQueue(QList<proofreading::RepairQueueItem> items) {
+    repairQueue_->setItems(std::move(items));
+}
+
+void MainWindow::approveRepairCandidate(QString candidateId) {
+    if (openedDatabasePath_.isEmpty()) {
+        return;
+    }
+    const auto id = core::ProofreadingCandidateId::fromString(candidateId);
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (!id || std::holds_alternative<storage::StorageError>(opened)) {
+        statusBar()->showMessage(tr("Repair decision could not be saved."), 5000);
+        reloadRepairQueue();
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    storage::RepairQueueRepository repairs(*database);
+    const auto status = repairs.approve(*id, QDateTime::currentDateTimeUtc());
+    if (status.has_value()) {
+        statusBar()->showMessage(status->message, 5000);
+        database.reset();
+        reloadRepairQueue();
+        return;
+    }
+    statusBar()->showMessage(tr("Candidate approved."), 3000);
+}
+
+void MainWindow::rejectRepairCandidate(QString candidateId) {
+    if (openedDatabasePath_.isEmpty()) {
+        return;
+    }
+    const auto id = core::ProofreadingCandidateId::fromString(candidateId);
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (!id || std::holds_alternative<storage::StorageError>(opened)) {
+        statusBar()->showMessage(tr("Repair decision could not be saved."), 5000);
+        reloadRepairQueue();
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    storage::RepairQueueRepository repairs(*database);
+    const auto status = repairs.reject(*id, QDateTime::currentDateTimeUtc());
+    if (status.has_value()) {
+        statusBar()->showMessage(status->message, 5000);
+        database.reset();
+        reloadRepairQueue();
+        return;
+    }
+    statusBar()->showMessage(tr("Candidate rejected."), 3000);
+}
+
+void MainWindow::editRepairSuggestion(QString candidateId, QString suggestion) {
+    if (openedDatabasePath_.isEmpty()) {
+        return;
+    }
+    const auto id = core::ProofreadingCandidateId::fromString(candidateId);
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (!id || std::holds_alternative<storage::StorageError>(opened)) {
+        statusBar()->showMessage(tr("Edited suggestion could not be saved."), 5000);
+        reloadRepairQueue();
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    storage::RepairQueueRepository repairs(*database);
+    const auto status =
+        repairs.editSuggestion(*id, std::move(suggestion), QDateTime::currentDateTimeUtc());
+    if (status.has_value()) {
+        statusBar()->showMessage(status->message, 5000);
+        database.reset();
+        reloadRepairQueue();
+        return;
+    }
+    statusBar()->showMessage(tr("Suggestion updated; approval is required again."), 3000);
+}
+
+void MainWindow::protectRepairTerm(QString candidateId, QString canonicalSpelling) {
+    if (openedDatabasePath_.isEmpty()) {
+        return;
+    }
+    const auto id = core::ProofreadingCandidateId::fromString(candidateId);
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (!id || std::holds_alternative<storage::StorageError>(opened)) {
+        statusBar()->showMessage(tr("Protected term could not be saved."), 5000);
+        reloadRepairQueue();
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    storage::RepairQueueRepository repairs(*database);
+    const auto status =
+        repairs.ignoreAndProtect(*id, tr("Protected from Repair Queue: %1").arg(canonicalSpelling),
+                                 QDateTime::currentDateTimeUtc());
+    if (status.has_value()) {
+        statusBar()->showMessage(status->message, 5000);
+        database.reset();
+        reloadRepairQueue();
+        return;
+    }
+    statusBar()->showMessage(tr("Candidate rejected and term protected."), 3000);
+}
+
+void MainWindow::reloadRepairQueue() {
+    if (openedDatabasePath_.isEmpty() || !workspace_.has_value()) {
+        return;
+    }
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (std::holds_alternative<storage::StorageError>(opened)) {
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    storage::RepairQueueRepository repairs(*database);
+    QList<proofreading::RepairQueueItem> items;
+    for (const auto& project : workspace_->projects) {
+        const auto listed = repairs.list(project.metadata.id);
+        if (std::holds_alternative<storage::StorageError>(listed)) {
+            return;
+        }
+        items.append(std::get<QList<proofreading::RepairQueueItem>>(listed));
+    }
+    repairQueue_->setItems(std::move(items));
 }
 
 bool MainWindow::openProjectFile(QStringView filePath) {
@@ -182,12 +320,25 @@ bool MainWindow::openProjectFile(QStringView filePath) {
     }
     auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(databaseResult));
     auto workspaceResult = ProjectWorkspaceLoader::load(*database);
-    database.reset();
     if (std::holds_alternative<storage::StorageError>(workspaceResult)) {
         showLoadError(std::get<storage::StorageError>(workspaceResult).message);
         return false;
     }
-    setWorkspace(std::get<StoredWorkspace>(std::move(workspaceResult)));
+    auto workspace = std::get<StoredWorkspace>(std::move(workspaceResult));
+    QList<proofreading::RepairQueueItem> repairItems;
+    storage::RepairQueueRepository repairs(*database);
+    for (const auto& project : workspace.projects) {
+        const auto listed = repairs.list(project.metadata.id);
+        if (std::holds_alternative<storage::StorageError>(listed)) {
+            showLoadError(std::get<storage::StorageError>(listed).message);
+            return false;
+        }
+        repairItems.append(std::get<QList<proofreading::RepairQueueItem>>(listed));
+    }
+    database.reset();
+    openedDatabasePath_ = absolutePath;
+    setWorkspace(std::move(workspace));
+    repairQueue_->setItems(std::move(repairItems));
     statusBar()->showMessage(tr("Opened stored project data from %1").arg(absolutePath), 5000);
     return true;
 }
@@ -356,7 +507,9 @@ void MainWindow::clearBookView() {
 }
 
 void MainWindow::showLoadError(QString message) {
+    openedDatabasePath_.clear();
     workspace_.reset();
+    repairQueue_->setItems({});
     projectExplorer_->clear();
     clearBookView();
     workspaceStatus_->setText(tr("Open failed: %1").arg(std::move(message)));

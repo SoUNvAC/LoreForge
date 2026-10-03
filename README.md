@@ -8,10 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 14 adds a candidate-only Proofreading Engine. Deterministic checks cover duplicated text,
-spacing, punctuation, terminology, name frequency, and protected terms. Structured semantic
-results are validated against exact immutable UTF-8 source spans before they become candidates;
-no detector can mutate source text. The bounded Context Engine, schema v5, persistent Story
+Phase 15 adds a human-controlled Repair Queue with persistent review decisions, editable
+suggestions, protected terms, source context, and an authorization gate that accepts only approved
+candidates or explicit audited manual edits. The candidate-only Proofreading Engine validates
+deterministic and semantic findings against exact immutable UTF-8 source spans; no detector can
+mutate source text. The bounded Context Engine, schema v6, persistent Story
 Memory, evidence-backed analysis, segmentation, inference snapshots, importers, and asynchronous
 Qwen transport remain covered by deterministic tests.
 

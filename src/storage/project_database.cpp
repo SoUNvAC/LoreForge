@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 5;
+constexpr int latestSchemaVersion = 6;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -332,6 +332,60 @@ StorageStatus applyStoryMemoryMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyRepairQueueMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/006_repair_queue.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("The repair-queue migration is unavailable."),
+                         migration.errorString(), false);
+    }
+    if (!database.transaction()) {
+        return sqlError(StorageErrorCode::TransactionFailed,
+                        QStringLiteral("Could not start the schema migration transaction."),
+                        database.lastError());
+    }
+    const auto statements = QString::fromUtf8(migration.readAll()).split(QLatin1Char(';'));
+    for (const auto& statement : statements) {
+        if (statement.trimmed().isEmpty()) {
+            continue;
+        }
+        if (const auto status = executeSql(database, statement, StorageErrorCode::MigrationFailed,
+                                           QStringLiteral("The repair-queue migration failed."));
+            status.has_value()) {
+            database.rollback();
+            return status;
+        }
+    }
+    QSqlQuery recordMigration(database);
+    recordMigration.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(6, ?, ?)"));
+    recordMigration.addBindValue(QStringLiteral("006_repair_queue"));
+    recordMigration.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!recordMigration.exec()) {
+        const auto migrationError =
+            sqlError(StorageErrorCode::MigrationFailed,
+                     QStringLiteral("Could not record the repair-queue migration."),
+                     recordMigration.lastError());
+        database.rollback();
+        return migrationError;
+    }
+    if (const auto status = executeSql(database, QStringLiteral("PRAGMA user_version = 6"),
+                                       StorageErrorCode::MigrationFailed,
+                                       QStringLiteral("Could not update the schema version."));
+        status.has_value()) {
+        database.rollback();
+        return status;
+    }
+    if (!database.commit()) {
+        const auto commitError = sqlError(StorageErrorCode::TransactionFailed,
+                                          QStringLiteral("Could not commit the schema migration."),
+                                          database.lastError());
+        database.rollback();
+        return commitError;
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -374,7 +428,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
                            "('schema_migrations', 'projects', 'books', 'chapters', 'blocks', "
                            "'llm_runs', 'prompt_templates', 'prompt_versions', 'output_schemas', "
                            "'context_snapshots', 'llm_run_artifacts', 'chapter_memory_records', "
-                           "'story_state_snapshots')"))) {
+                           "'story_state_snapshots', 'proofreading_candidates', "
+                           "'protected_terms')"))) {
         return sqlError(StorageErrorCode::CorruptDatabase,
                         QStringLiteral("The project database schema could not be inspected."),
                         tables.lastError());
@@ -397,6 +452,8 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         QStringLiteral("llm_run_artifacts"),
         QStringLiteral("chapter_memory_records"),
         QStringLiteral("story_state_snapshots"),
+        QStringLiteral("proofreading_candidates"),
+        QStringLiteral("protected_terms"),
     };
     if (presentTables != requiredTables) {
         return makeError(StorageErrorCode::CorruptDatabase,
@@ -515,6 +572,65 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The story-state schema is incomplete."), {}, false);
     }
+    QSqlQuery candidateColumns(database);
+    if (!candidateColumns.exec(QStringLiteral("PRAGMA table_info(proofreading_candidates)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The repair-queue schema could not be inspected."),
+                        candidateColumns.lastError());
+    }
+    QSet<QString> candidateColumnNames;
+    while (candidateColumns.next()) {
+        candidateColumnNames.insert(candidateColumns.value(1).toString());
+    }
+    const QSet<QString> requiredCandidateColumns{
+        QStringLiteral("id"),
+        QStringLiteral("project_id"),
+        QStringLiteral("chapter_id"),
+        QStringLiteral("source_id"),
+        QStringLiteral("start_byte"),
+        QStringLiteral("end_byte"),
+        QStringLiteral("original_text"),
+        QStringLiteral("detected_suggestion"),
+        QStringLiteral("current_suggestion"),
+        QStringLiteral("category"),
+        QStringLiteral("confidence"),
+        QStringLiteral("evidence"),
+        QStringLiteral("source_context"),
+        QStringLiteral("semantic_impact"),
+        QStringLiteral("origin"),
+        QStringLiteral("status"),
+        QStringLiteral("detector_version"),
+        QStringLiteral("source_hash"),
+        QStringLiteral("created_at"),
+        QStringLiteral("updated_at"),
+    };
+    if (candidateColumnNames != requiredCandidateColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The repair-queue schema is incomplete."), {}, false);
+    }
+    QSqlQuery protectedTermColumns(database);
+    if (!protectedTermColumns.exec(QStringLiteral("PRAGMA table_info(protected_terms)"))) {
+        return sqlError(StorageErrorCode::CorruptDatabase,
+                        QStringLiteral("The protected-term schema could not be inspected."),
+                        protectedTermColumns.lastError());
+    }
+    QSet<QString> protectedTermColumnNames;
+    while (protectedTermColumns.next()) {
+        protectedTermColumnNames.insert(protectedTermColumns.value(1).toString());
+    }
+    const QSet<QString> requiredProtectedTermColumns{
+        QStringLiteral("id"),
+        QStringLiteral("project_id"),
+        QStringLiteral("canonical_spelling"),
+        QStringLiteral("allowed_variants_json"),
+        QStringLiteral("notes"),
+        QStringLiteral("chapter_scope"),
+        QStringLiteral("created_at"),
+    };
+    if (protectedTermColumnNames != requiredProtectedTermColumns) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The protected-term schema is incomplete."), {}, false);
+    }
     return std::nullopt;
 }
 
@@ -579,6 +695,12 @@ StorageResult<int> migrate(QSqlDatabase& database) {
             return *status;
         }
         version = 5;
+    }
+    if (version == 5) {
+        if (const auto status = applyRepairQueueMigration(database); status.has_value()) {
+            return *status;
+        }
+        version = 6;
     }
 
     QSqlQuery userVersion(database);

@@ -4,6 +4,7 @@ qt_add_library(
     proofreading_support.cpp
     proofreading_types.cpp
     protected_term_registry.cpp
+    repair_queue.cpp
     semantic_proofreader.cpp
 )
 

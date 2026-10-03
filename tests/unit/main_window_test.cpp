@@ -1,14 +1,19 @@
 #include "document_fixture.h"
 #include "main_window.h"
+#include "repair_queue_widget.h"
 
 #include "loreforge/storage/book_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/project_repository.h"
+#include "loreforge/storage/repair_queue_repository.h"
 
 #include <QAction>
 #include <QDockWidget>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTreeWidget>
@@ -26,6 +31,8 @@ class MainWindowTest final : public QObject {
     void displaysStoredWorkspaceWithoutReorderingDomainData();
     void reportsProjectOpenFailuresInTheInterface();
     void rendersInspectableContext();
+    void presentsAndControlsTheRepairQueue();
+    void loadsAndPersistsRepairQueueFromStoredProject();
 };
 
 namespace {
@@ -55,6 +62,25 @@ std::unique_ptr<loreforge::storage::ProjectDatabase> createStoredFixture(const Q
         return {};
     }
     return database;
+}
+
+loreforge::proofreading::ProofreadingCandidate storedRepairCandidate() {
+    const auto document = loreforge::test::handcraftedDocument();
+    const auto& block = document.chapters.first().blocks.at(1);
+    return {
+        loreforge::core::ProofreadingCandidateId::fromStableKey(u"ui:stored-repair"_s),
+        document.chapters.first().id,
+        {block.sourceSpan.sourceId, block.sourceSpan.startByte, block.sourceSpan.startByte + 5},
+        u"Hello"_s,
+        u"Hallo"_s,
+        loreforge::proofreading::CandidateCategory::Typo,
+        0.91,
+        u"Stored review evidence."_s,
+        loreforge::proofreading::SemanticImpact::TextOnly,
+        loreforge::proofreading::CandidateOrigin::Deterministic,
+        u"deterministic-proofreader-v1"_s,
+        document.metadata.sourceHash,
+    };
 }
 
 } // namespace
@@ -187,6 +213,99 @@ void MainWindowTest::rendersInspectableContext() {
     QVERIFY(rendered.contains(u"Estimated: 321"_s));
     QVERIFY(rendered.contains(u"1 characters, 2 events, 3 open threads"_s));
     QCOMPARE(rawPrompt->toPlainText(), context.rawFinalPrompt);
+}
+
+void MainWindowTest::presentsAndControlsTheRepairQueue() {
+    const auto text = u"Mara walk home."_s;
+    const auto hash = loreforge::core::ContentHash::sha256(text);
+    const loreforge::proofreading::ProofreadingCandidate candidate{
+        loreforge::core::ProofreadingCandidateId::fromStableKey(u"ui:repair:candidate"_s),
+        loreforge::core::ChapterId::fromStableKey(u"ui:repair:chapter"_s),
+        {u"chapter.txt"_s, 5, 9},
+        u"walk"_s,
+        u"walks"_s,
+        loreforge::proofreading::CandidateCategory::Typo,
+        0.88,
+        u"The subject requires a singular verb."_s,
+        loreforge::proofreading::SemanticImpact::ActionChange,
+        loreforge::proofreading::CandidateOrigin::Semantic,
+        u"semantic-proofreader-v1"_s,
+        hash,
+    };
+    const auto reviewed = loreforge::proofreading::RepairQueueWorkflow::review(
+        loreforge::core::ProjectId::fromStableKey(u"ui:repair:project"_s), candidate, text,
+        QDateTime::fromString(u"2026-10-04T08:00:00.000Z"_s, Qt::ISODateWithMs));
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(reviewed));
+
+    loreforge::app::MainWindow window;
+    window.inspectRepairQueue({std::get<loreforge::proofreading::RepairQueueItem>(reviewed)});
+    auto* dock = window.findChild<QDockWidget*>(u"repairQueueDock"_s);
+    auto* queue = window.findChild<loreforge::app::RepairQueueWidget*>();
+    auto* table = window.findChild<QTableWidget*>(u"repairQueueTable"_s);
+    auto* evidence = window.findChild<QLabel*>(u"repairEvidence"_s);
+    auto* context = window.findChild<QPlainTextEdit*>(u"repairSourceContext"_s);
+    auto* suggestion = window.findChild<QLineEdit*>(u"repairSuggestion"_s);
+    auto* edit = window.findChild<QPushButton*>(u"editRepairSuggestion"_s);
+    auto* approve = window.findChild<QPushButton*>(u"approveRepairCandidate"_s);
+    QVERIFY(dock != nullptr);
+    QVERIFY(queue != nullptr);
+    QVERIFY(table != nullptr);
+    QVERIFY(evidence != nullptr);
+    QVERIFY(context != nullptr);
+    QVERIFY(suggestion != nullptr);
+    QVERIFY(edit != nullptr);
+    QVERIFY(approve != nullptr);
+    QCOMPARE(table->rowCount(), 1);
+    QCOMPARE(table->item(0, 0)->text(), u"TYPO"_s);
+    QCOMPARE(table->item(0, 1)->text(), u"88%"_s);
+    QCOMPARE(table->item(0, 3)->text(), u"REVIEW_REQUIRED"_s);
+    QVERIFY(evidence->text().contains(u"singular verb"_s));
+    QCOMPARE(context->toPlainText(), text);
+
+    QSignalSpy edited(queue, &loreforge::app::RepairQueueWidget::suggestionEdited);
+    suggestion->setText(u"walked"_s);
+    edit->click();
+    QCOMPARE(edited.count(), 1);
+    QCOMPARE(table->item(0, 2)->text(), u"walked"_s);
+    QSignalSpy approved(queue, &loreforge::app::RepairQueueWidget::candidateApproved);
+    approve->click();
+    QCOMPARE(approved.count(), 1);
+    QCOMPARE(table->item(0, 3)->text(), u"APPROVED"_s);
+    QVERIFY(!approve->isEnabled());
+}
+
+void MainWindowTest::loadsAndPersistsRepairQueueFromStoredProject() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(u"repair-ui.loreforge"_s);
+    auto database = createStoredFixture(databasePath);
+    QVERIFY(database != nullptr);
+    loreforge::storage::RepairQueueRepository repairs(*database);
+    const auto candidate = storedRepairCandidate();
+    QVERIFY(!repairs
+                 .enqueue(projectRecord().id, candidate, u"Hello, world."_s,
+                          QDateTime::fromString(u"2026-10-04T08:00:00.000Z"_s, Qt::ISODateWithMs))
+                 .has_value());
+    database.reset();
+
+    loreforge::app::MainWindow window;
+    QVERIFY(window.openProjectFile(databasePath));
+    auto* table = window.findChild<QTableWidget*>(u"repairQueueTable"_s);
+    auto* approve = window.findChild<QPushButton*>(u"approveRepairCandidate"_s);
+    QVERIFY(table != nullptr);
+    QVERIFY(approve != nullptr);
+    QCOMPARE(table->rowCount(), 1);
+    QCOMPARE(table->item(0, 3)->text(), u"REVIEW_REQUIRED"_s);
+    approve->click();
+
+    auto reopened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(reopened));
+    database = std::get<std::unique_ptr<loreforge::storage::ProjectDatabase>>(std::move(reopened));
+    loreforge::storage::RepairQueueRepository persisted(*database);
+    const auto loaded = persisted.find(candidate.id);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(loaded));
+    QCOMPARE(std::get<loreforge::proofreading::RepairQueueItem>(loaded).status,
+             loreforge::proofreading::CandidateStatus::Approved);
 }
 
 QTEST_MAIN(MainWindowTest)

@@ -3,6 +3,7 @@
 #include "project_workspace.h"
 
 #include "loreforge/context/context_types.h"
+#include "loreforge/proofreading/repair_queue.h"
 
 #include <QMainWindow>
 #include <QStringView>
@@ -17,6 +18,7 @@ class QTextBrowser;
 namespace loreforge::app {
 
 class ContextInspectorWidget;
+class RepairQueueWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -26,17 +28,23 @@ class MainWindow final : public QMainWindow {
 
     [[nodiscard]] bool openProjectFile(QStringView filePath);
     void inspectContext(const context::ContextInspectorData& context);
+    void inspectRepairQueue(QList<proofreading::RepairQueueItem> items);
 
   private slots:
     void chooseProjectFile();
     void selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous);
+    void approveRepairCandidate(QString candidateId);
+    void rejectRepairCandidate(QString candidateId);
+    void editRepairSuggestion(QString candidateId, QString suggestion);
+    void protectRepairTerm(QString candidateId, QString canonicalSpelling);
 
   private:
     void setWorkspace(StoredWorkspace workspace);
     void clearBookView();
     void showBook(qsizetype projectIndex, qsizetype bookIndex);
     void showLoadError(QString message);
+    void reloadRepairQueue();
     [[nodiscard]] const document::Document* selectedBook() const;
 
     QTreeWidget* projectExplorer_ = nullptr;
@@ -49,9 +57,11 @@ class MainWindow final : public QMainWindow {
     QLabel* chapterMetadata_ = nullptr;
     QLabel* chapterStatus_ = nullptr;
     ContextInspectorWidget* contextInspector_ = nullptr;
+    RepairQueueWidget* repairQueue_ = nullptr;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;
+    QString openedDatabasePath_;
 };
 
 } // namespace loreforge::app

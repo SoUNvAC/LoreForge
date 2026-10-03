@@ -6,6 +6,7 @@ qt_add_library(
     llm_run_repository.cpp
     project_database.cpp
     project_repository.cpp
+    repair_queue_repository.cpp
     story_state_repository.cpp
 )
 
@@ -23,6 +24,7 @@ target_link_libraries(
         LoreForge::Document
         LoreForge::Inference
         LoreForge::Narrative
+        LoreForge::Proofreading
         LoreForge::ProjectOptions
         Qt6::Core
         Qt6::Sql
@@ -38,4 +40,5 @@ qt_add_resources(
         migrations/003_llm_runs.sql
         migrations/004_inference_artifacts.sql
         migrations/005_story_memory.sql
+        migrations/006_repair_queue.sql
 )

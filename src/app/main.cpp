@@ -4,7 +4,6 @@
 #include "main_window.h"
 
 #include <QApplication>
-#include <QTimer>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -14,11 +13,10 @@ int main(int argc, char* argv[]) {
     qCInfo(loreforgeApp) << "Starting LoreForge" << QApplication::applicationVersion();
 
     loreforge::app::MainWindow window;
-    window.show();
-
     if (QApplication::arguments().contains(QStringLiteral("--smoke-test"))) {
-        QTimer::singleShot(0, &application, &QCoreApplication::quit);
+        return 0;
     }
 
+    window.show();
     return application.exec();
 }

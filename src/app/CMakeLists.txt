@@ -8,6 +8,8 @@ qt_add_library(
     main_window.h
     project_workspace.cpp
     project_workspace.h
+    repair_queue_widget.cpp
+    repair_queue_widget.h
 )
 
 add_library(LoreForge::DesktopUi ALIAS LoreForgeDesktopUi)
@@ -22,6 +24,7 @@ target_link_libraries(
     LoreForgeDesktopUi
     PUBLIC
         LoreForge::Storage
+        LoreForge::Proofreading
         LoreForge::Context
         LoreForge::Text
         LoreForge::ProjectOptions

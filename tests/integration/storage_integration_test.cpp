@@ -9,6 +9,7 @@
 #include "loreforge/storage/llm_run_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/project_repository.h"
+#include "loreforge/storage/repair_queue_repository.h"
 #include "loreforge/storage/story_state_repository.h"
 
 #include <QFile>
@@ -37,6 +38,7 @@ class StorageIntegrationTest final : public QObject {
     void preservesInspectableInferenceSnapshotsAcrossReopen();
     void persistsAndDeterministicallyRebuildsStoryState();
     void storesContextBeforeProducingBoundRequest();
+    void persistsHumanRepairDecisionsAndProtectedTerms();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
     void rejectsNonSqliteInput();
@@ -87,6 +89,28 @@ memoryRecord(const loreforge::core::ProjectId& projectId,
     return {projectId, chapter.index, std::move(analysis)};
 }
 
+loreforge::proofreading::ProofreadingCandidate
+repairCandidate(const loreforge::document::Document& document, QStringView stableKey,
+                QString original = u"Hello"_s, QString suggestion = u"Hallo"_s) {
+    const auto& chapter = document.chapters.first();
+    const auto& block = chapter.blocks.at(1);
+    return {
+        loreforge::core::ProofreadingCandidateId::fromStableKey(stableKey),
+        chapter.id,
+        {block.sourceSpan.sourceId, block.sourceSpan.startByte,
+         block.sourceSpan.startByte + original.toUtf8().size()},
+        std::move(original),
+        std::move(suggestion),
+        loreforge::proofreading::CandidateCategory::Typo,
+        0.91,
+        u"Dictionary and context agree on the replacement."_s,
+        loreforge::proofreading::SemanticImpact::TextOnly,
+        loreforge::proofreading::CandidateOrigin::Deterministic,
+        u"deterministic-proofreader-v1"_s,
+        document.metadata.sourceHash,
+    };
+}
+
 bool executeRawSql(const QString& databasePath, const QString& sql) {
     const auto connectionName = u"storage-test-raw"_s;
     bool succeeded = false;
@@ -113,7 +137,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 5);
+    QCOMPARE(database->schemaVersion(), 6);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -204,7 +228,7 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 5);
+    QCOMPARE(database->schemaVersion(), 6);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
@@ -248,7 +272,7 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 5);
+    QCOMPARE(database->schemaVersion(), 6);
     database.reset();
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));
@@ -259,6 +283,9 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
                           QStringLiteral("SELECT chapter_id FROM chapter_memory_records LIMIT 1")));
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT id FROM story_state_snapshots LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath,
+                          QStringLiteral("SELECT id FROM proofreading_candidates LIMIT 1")));
+    QVERIFY(executeRawSql(databasePath, QStringLiteral("SELECT id FROM protected_terms LIMIT 1")));
 }
 
 void StorageIntegrationTest::persistsLLMRunsAcrossReopen() {
@@ -540,6 +567,58 @@ void StorageIntegrationTest::storesContextBeforeProducingBoundRequest() {
     QVERIFY(std::holds_alternative<loreforge::context::ContextOperationError>(missing));
     QCOMPARE(std::get<loreforge::context::ContextOperationError>(missing).code,
              loreforge::context::ContextOperationErrorCode::StorageFailed);
+}
+
+void StorageIntegrationTest::persistsHumanRepairDecisionsAndProtectedTerms() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto databasePath = directory.filePath(QStringLiteral("repair-queue.loreforge"));
+    auto created = loreforge::storage::ProjectDatabase::create(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+    const auto document = loreforge::test::handcraftedDocument();
+    loreforge::storage::BookRepository books(*database);
+    QVERIFY(!books.saveDocument(projectRecord().id, document).has_value());
+
+    loreforge::storage::RepairQueueRepository queue(*database);
+    const auto now = QDateTime::fromString(u"2026-10-04T08:00:00.000Z"_s, Qt::ISODateWithMs);
+    const auto first = repairCandidate(document, u"repair:persisted"_s);
+    QVERIFY(!queue.enqueue(projectRecord().id, first, u"Hello, world."_s, now).has_value());
+    QVERIFY(!queue.editSuggestion(first.id, u"Greetings"_s, now.addSecs(1)).has_value());
+    QVERIFY(!queue.approve(first.id, now.addSecs(2)).has_value());
+    const auto loadedApproved = queue.find(first.id);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::RepairQueueItem>(loadedApproved));
+    const auto& approved = std::get<loreforge::proofreading::RepairQueueItem>(loadedApproved);
+    QCOMPARE(approved.status, loreforge::proofreading::CandidateStatus::Approved);
+    QCOMPARE(approved.currentSuggestion, u"Greetings"_s);
+    QVERIFY(std::holds_alternative<loreforge::proofreading::PatchAuthorization>(
+        loreforge::proofreading::RepairGate::authorizeApprovedCandidate(approved)));
+
+    const auto second = repairCandidate(document, u"repair:protected"_s, u"world"_s, u"World"_s);
+    QVERIFY(
+        !queue.enqueue(projectRecord().id, second, u"Hello, world."_s, now.addSecs(3)).has_value());
+    QVERIFY(!queue.ignoreAndProtect(second.id, u"Intentional house style."_s, now.addSecs(4))
+                 .has_value());
+    const auto terms = queue.protectedTerms(projectRecord().id);
+    QVERIFY(std::holds_alternative<QList<loreforge::proofreading::ProtectedTerm>>(terms));
+    QCOMPARE(std::get<QList<loreforge::proofreading::ProtectedTerm>>(terms).size(), 1);
+    QCOMPARE(
+        std::get<QList<loreforge::proofreading::ProtectedTerm>>(terms).first().canonicalSpelling,
+        u"world"_s);
+    database.reset();
+
+    auto reopened = loreforge::storage::ProjectDatabase::open(databasePath);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(reopened));
+    database = takeDatabase(reopened);
+    loreforge::storage::RepairQueueRepository reopenedQueue(*database);
+    const auto items = reopenedQueue.list(projectRecord().id);
+    QVERIFY(std::holds_alternative<QList<loreforge::proofreading::RepairQueueItem>>(items));
+    const auto& persisted = std::get<QList<loreforge::proofreading::RepairQueueItem>>(items);
+    QCOMPARE(persisted.size(), 2);
+    QCOMPARE(persisted.at(0).status, loreforge::proofreading::CandidateStatus::Approved);
+    QCOMPARE(persisted.at(1).status, loreforge::proofreading::CandidateStatus::Rejected);
 }
 
 void StorageIntegrationTest::rejectsANewerSchemaVersion() {
