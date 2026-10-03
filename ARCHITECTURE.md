@@ -68,6 +68,15 @@ content-addressed `loreforge-context-v1` snapshot before reconstructing a produc
 `LLMRequest` from its stored ID. The UI can display the same validated snapshot through the
 Context Inspector, while `ILLMClient` remains only a generic transport boundary.
 
+Phase 14 adds the `proofreading` domain module. Deterministic detectors consume exact immutable
+UTF-8 chapter projections and emit stable, source-hash-bound candidates for duplicated text,
+spacing, punctuation, terminology, and name anomalies. `ProtectedTermRegistry` suppresses
+deterministic suggestions over intentional language. `SemanticProofreader` defines and validates
+structured model output, derives original text from source bytes, and rejects invalid boundaries
+or protected-term edits. It does not call the transport directly: production semantic requests
+still pass through the stored Context Engine gate. No Phase 14 API mutates source or creates a
+patch; review and repair state belong to Phase 15.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.

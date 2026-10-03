@@ -8,12 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 13 adds a bounded Context Engine. It deterministically ranks relevant Story Memory,
-reserves completion capacity, omits low-priority memory when necessary, and stores the exact
-inspectable prompt before a production request can be created. The desktop Context Inspector
-shows every rendered section, token estimates, omissions, and the raw final prompt. Schema v5,
-persistent Story Memory, evidence-backed analysis, segmentation, inference snapshots, importers,
-and asynchronous Qwen transport remain covered by deterministic tests.
+Phase 14 adds a candidate-only Proofreading Engine. Deterministic checks cover duplicated text,
+spacing, punctuation, terminology, name frequency, and protected terms. Structured semantic
+results are validated against exact immutable UTF-8 source spans before they become candidates;
+no detector can mutate source text. The bounded Context Engine, schema v5, persistent Story
+Memory, evidence-backed analysis, segmentation, inference snapshots, importers, and asynchronous
+Qwen transport remain covered by deterministic tests.
 
 ## Requirements
 

@@ -59,6 +59,10 @@ struct StoryStateSnapshotIdTag {
     static constexpr std::string_view prefix = "story";
 };
 
+struct ProofreadingCandidateIdTag {
+    static constexpr std::string_view prefix = "candidate";
+};
+
 template <typename Tag> class Identifier final {
   public:
     Identifier() = default;
@@ -126,5 +130,6 @@ using EventMemoryId = Identifier<EventMemoryIdTag>;
 using RelationshipMemoryId = Identifier<RelationshipMemoryIdTag>;
 using OpenThreadMemoryId = Identifier<OpenThreadMemoryIdTag>;
 using StoryStateSnapshotId = Identifier<StoryStateSnapshotIdTag>;
+using ProofreadingCandidateId = Identifier<ProofreadingCandidateIdTag>;
 
 } // namespace loreforge::core

@@ -40,11 +40,14 @@ void CoreTypesTest::stableIdentifiersAreDeterministicAndTyped() {
     const auto openThread =
         loreforge::core::OpenThreadMemoryId::fromStableKey(u"Who opened the door?"_s);
     const auto story = loreforge::core::StoryStateSnapshotId::fromStableKey(u"project:chapter:1"_s);
+    const auto candidate =
+        loreforge::core::ProofreadingCandidateId::fromStableKey(u"chapter:span:category"_s);
     QVERIFY(character.toString().startsWith(u"character_"_s));
     QVERIFY(event.toString().startsWith(u"event_"_s));
     QVERIFY(relationship.toString().startsWith(u"relationship_"_s));
     QVERIFY(openThread.toString().startsWith(u"thread_"_s));
     QVERIFY(story.toString().startsWith(u"story_"_s));
+    QVERIFY(candidate.toString().startsWith(u"candidate_"_s));
     QCOMPARE(loreforge::core::StoryStateSnapshotId::fromString(story.toString()), story);
 }
 
