@@ -76,3 +76,18 @@ target_link_libraries(
 )
 
 add_test(NAME LoreForgeStorageIntegrationTests COMMAND LoreForgeStorageIntegrationTests)
+
+qt_add_executable(
+    LoreForgeLocalGitIntegrationTests
+    local_git_integration_test.cpp
+)
+
+target_link_libraries(
+    LoreForgeLocalGitIntegrationTests
+    PRIVATE
+        LoreForge::Git
+        LoreForge::ProjectOptions
+        Qt6::Test
+)
+
+add_test(NAME LoreForgeLocalGitIntegrationTests COMMAND LoreForgeLocalGitIntegrationTests)

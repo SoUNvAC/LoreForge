@@ -8,9 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 15 adds a human-controlled Repair Queue with persistent review decisions, editable
-suggestions, protected terms, source context, and an authorization gate that accepts only approved
-candidates or explicit audited manual edits. The candidate-only Proofreading Engine validates
+Phase 16 adds local Git repository discovery, branch/HEAD/status snapshots, scoped diffs,
+integrity-checked patch application, explicit commit metadata, and a fail-closed working-tree
+safety gate. Every text patch consumes a Phase 15 Repair Gate authorization; unrelated changes
+must be acknowledged path by path and are never included in the reviewed commit. The
+human-controlled Repair Queue retains persistent review decisions, editable suggestions,
+protected terms, and source context. The candidate-only Proofreading Engine validates
 deterministic and semantic findings against exact immutable UTF-8 source spans; no detector can
 mutate source text. The bounded Context Engine, schema v6, persistent Story
 Memory, evidence-backed analysis, segmentation, inference snapshots, importers, and asynchronous

@@ -77,6 +77,14 @@ or protected-term edits. It does not call the transport directly: production sem
 still pass through the stored Context Engine gate. No Phase 14 API mutates source or creates a
 patch; review and repair state belong to Phase 15.
 
+Phase 15 adds the Repair Queue and `RepairGate`. Review decisions are durable and an edit can
+cross the patch boundary only after a human approves a candidate or records an explicit manual
+reason. Phase 16 adds the local `git` adapter. It invokes Git without a shell, exposes repository,
+branch, HEAD, status, and diff state, and applies only text patches whose full-file hash and exact
+UTF-8 byte span still match their authorization. Commit author identity is always supplied by the
+caller. The commit gate fails closed when any unrelated working-tree path has not been explicitly
+acknowledged, and `git commit --only` keeps acknowledged-but-unreviewed paths out of the commit.
+
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.
