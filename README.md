@@ -8,6 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
+Phase 19 adds content-addressed artifact dependencies, durable clean/dirty cache receipts,
+selective topological rebuilding and stale asynchronous-result rejection. Chapter-local parsing
+and analysis are reused when safe; dependent Story State and shifted evidence projections become
+dirty. Parser/model/prompt/schema/configuration changes invalidate their actual consumers.
+Executors are injected and never mutate source implicitly. See [incremental analysis](docs/incremental-analysis.md).
 Phase 18 adds deterministic semantic revision reports: exact UTF-8 changed spans, changed
 chapters, potential entity/story impact, and scoped analysis invalidation. Fully covered,
 source-verified approved typo repairs are classified separately from semantic and unknown

@@ -70,6 +70,6 @@ one transaction. Earlier snapshots, unrelated chapter records, original document
 immutable imported metadata remain intact. Missing analysis prevents rebuilding a later snapshot
 until the affected chapter has been analyzed again. No schema migration is required.
 
-Dependency-graph persistence, dirty-state scheduling, automatic evidence rebasing, and selective
-rebuild orchestration are Phase 19 work. This phase provides the explicit impact and invalidation
-contract those operations will consume.
+Phase 19 consumes this contract through `ChapterPipeline::invalidate`, versioned dependency graph
+checkpoints and selective rebuild scheduling. Shifted evidence is invalidated and reparsed, not
+automatically rebased. See [incremental analysis](incremental-analysis.md).

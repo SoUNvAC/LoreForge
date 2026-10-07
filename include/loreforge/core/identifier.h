@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <QHashFunctions>
 #include <QString>
 #include <QStringView>
 

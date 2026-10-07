@@ -103,4 +103,15 @@ classification, potential entity impact, and an explicit invalidation plan. Comp
 review coverage can certify typo/text-only revisions; missing coverage remains unknown, and
 entity evidence or changed analysis content can escalate a review's classification. Git blob
 reads remain in `GitRepository`. Storage executes scoped invalidation transactions and preserves
-original documents. Phase 19 will own dependency graphs and selective rebuilding.
+original documents.
+
+Phase 19 adds the provider-neutral `incremental` coordinator. `DependencyGraph` tracks immutable
+source projections and derived artifact input/output receipts, validates DAG replacements atomically,
+propagates dirty state and schedules only the requested prerequisite closure. Versioned checkpoints
+retain compatible clean receipts across restarts; building tasks restart dirty. `ChapterPipeline`
+maps canonical novel chapters to parse, analysis and ordered Story State dependencies and consumes
+Phase 18 invalidation plans. Context-dependent analysis explicitly depends on earlier Story State.
+Worker tickets bind graph identity, ordered dependency hashes and unique serials, so invalidation
+rejects late results rather than publishing stale analysis. Payload persistence stays in the owning
+repositories; model execution remains behind the existing Context Engine gate. No source rewrite,
+new desktop action or SQLite migration is introduced.
