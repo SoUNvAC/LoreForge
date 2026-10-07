@@ -91,3 +91,7 @@ target_link_libraries(
 )
 
 add_test(NAME LoreForgeLocalGitIntegrationTests COMMAND LoreForgeLocalGitIntegrationTests)
+
+qt_add_executable(LoreForgeGitHubClientTests github_client_test.cpp)
+target_link_libraries(LoreForgeGitHubClientTests PRIVATE LoreForge::Git LoreForge::ProjectOptions Qt6::Test)
+add_test(NAME LoreForgeGitHubClientTests COMMAND LoreForgeGitHubClientTests)

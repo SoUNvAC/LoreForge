@@ -18,6 +18,7 @@ class LocalGitIntegrationTest final : public QObject {
     void discoversRepositoryAndReportsSnapshotAndDiff();
     void appliesOnlyAnExactAuthorizedPatch();
     void refusesUnrelatedEditsAndCommitsOnlyReviewedPaths();
+    void pushesReviewedFeatureBranchAndTracksRemote();
 };
 
 namespace {
@@ -226,6 +227,75 @@ void LocalGitIntegrationTest::refusesUnrelatedEditsAndCommitsOnlyReviewedPaths()
     });
     QVERIFY(notes != changes.cend());
     QVERIFY(notes->isUntracked());
+}
+
+void LocalGitIntegrationTest::pushesReviewedFeatureBranchAndTracksRemote() {
+    using namespace loreforge::git;
+    QTemporaryDir directory;
+    QTemporaryDir remoteDirectory;
+    QVERIFY(directory.isValid());
+    QVERIFY(remoteDirectory.isValid());
+    const QByteArray chapter("Mara walk home.\n");
+    QVERIFY(initializeRepository(directory.path(), chapter));
+    QCOMPARE(git(remoteDirectory.path(), {u"init"_s, u"--bare"_s}).exitCode, 0);
+    QCOMPARE(git(directory.path(), {u"remote"_s, u"add"_s, u"origin"_s, remoteDirectory.path()})
+                 .exitCode,
+             0);
+    QCOMPARE(git(directory.path(), {u"push"_s, u"origin"_s, u"feature/test"_s}).exitCode, 0);
+    const auto result = GitRepository::discover(directory.path());
+    QVERIFY(std::holds_alternative<GitRepository>(result));
+    const auto repository = std::get<GitRepository>(result);
+    QVERIFY(repository.createContributionBranch(u"main"_s).has_value());
+    QVERIFY(!repository.createContributionBranch(u"feature/repair"_s).has_value());
+    const auto prepared = repository.preparePatch(u"story/chapter.txt"_s,
+                                                  authorizationFor(chapter, 5, 9, u"walks"_s));
+    QVERIFY(std::holds_alternative<PreparedPatch>(prepared));
+    const auto patch = std::get<PreparedPatch>(prepared);
+    QVERIFY(!repository.applyPatch(patch).has_value());
+    const auto committed = repository.commit(
+        {{patch}, {u"Maintainer"_s, u"maintainer@example.invalid"_s, u"repair verb"_s}, {}});
+    QVERIFY(std::holds_alternative<CommitReceipt>(committed));
+    const auto receipt = std::get<CommitReceipt>(committed);
+    auto stale = receipt;
+    stale.head = QString(40, u'0');
+    const auto staleError = repository.pushContribution(stale);
+    QVERIFY(staleError.has_value());
+    QCOMPARE(staleError->code, GitErrorCode::SourceChanged);
+    QVERIFY(!repository.pushContribution(receipt).has_value());
+    QVERIFY(!repository.fetch().has_value());
+    const auto tracking = repository.remoteTracking(u"origin"_s, u"feature/repair"_s);
+    QVERIFY(std::holds_alternative<RemoteTracking>(tracking));
+    QCOMPARE(std::get<RemoteTracking>(tracking).remoteHead, receipt.head);
+    QCOMPARE(std::get<RemoteTracking>(tracking).ahead, 0);
+    QCOMPARE(std::get<RemoteTracking>(tracking).behind, 0);
+    QVERIFY(!repository.sync(u"origin"_s, u"feature/repair"_s).has_value());
+    QTemporaryDir collaborator;
+    QVERIFY(collaborator.isValid());
+    QCOMPARE(git(collaborator.path(),
+                 {u"clone"_s, u"--branch"_s, u"feature/repair"_s, remoteDirectory.path(), u"."_s})
+                 .exitCode,
+             0);
+    QCOMPARE(git(collaborator.path(), {u"config"_s, u"user.name"_s, u"Collaborator"_s}).exitCode,
+             0);
+    QCOMPARE(
+        git(collaborator.path(), {u"config"_s, u"user.email"_s, u"collaborator@example.invalid"_s})
+            .exitCode,
+        0);
+    QVERIFY(writeFile(QDir(collaborator.path()).filePath(u"README.md"_s),
+                      QByteArray("remote update\n")));
+    QCOMPARE(git(collaborator.path(), {u"add"_s, u"README.md"_s}).exitCode, 0);
+    QCOMPARE(git(collaborator.path(), {u"commit"_s, u"-m"_s, u"remote update"_s}).exitCode, 0);
+    QCOMPARE(git(collaborator.path(), {u"push"_s, u"origin"_s, u"feature/repair"_s}).exitCode, 0);
+    QVERIFY(!repository.fetch().has_value());
+    const auto behind = repository.remoteTracking(u"origin"_s, u"feature/repair"_s);
+    QVERIFY(std::holds_alternative<RemoteTracking>(behind));
+    QCOMPARE(std::get<RemoteTracking>(behind).behind, 1);
+    QVERIFY(!repository.sync(u"origin"_s, u"feature/repair"_s).has_value());
+    const auto caughtUp = repository.remoteTracking(u"origin"_s, u"feature/repair"_s);
+    QVERIFY(std::holds_alternative<RemoteTracking>(caughtUp));
+    QCOMPARE(std::get<RemoteTracking>(caughtUp).behind, 0);
+    QVERIFY(writeFile(QDir(directory.path()).filePath(u"notes.txt"_s), QByteArray("dirty\n")));
+    QVERIFY(repository.sync(u"origin"_s, u"feature/repair"_s).has_value());
 }
 
 QTEST_GUILESS_MAIN(LocalGitIntegrationTest)

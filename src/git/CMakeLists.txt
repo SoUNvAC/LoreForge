@@ -1,6 +1,7 @@
 qt_add_library(
     LoreForgeGit STATIC
     git_repository.cpp
+    github_client.cpp
 )
 
 add_library(LoreForge::Git ALIAS LoreForgeGit)
@@ -18,4 +19,5 @@ target_link_libraries(
         LoreForge::Proofreading
         LoreForge::ProjectOptions
         Qt6::Core
+        Qt6::Network
 )

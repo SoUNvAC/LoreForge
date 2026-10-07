@@ -8,7 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 16 adds local Git repository discovery, branch/HEAD/status snapshots, scoped diffs,
+Phase 17 adds feature-branch contribution delivery, fast-forward remote synchronization,
+remote commit tracking, generated draft PR descriptions, and an asynchronous GitHub REST
+adapter with replaceable authentication and commit/check/PR inspection. Contributions verify
+the reviewed local and pushed commit before publication. Git pushes use the user's configured
+SSH credentials; API tokens are resolved at request time and never stored by the adapter.
+Phase 16 provides local Git repository discovery, branch/HEAD/status snapshots, scoped diffs,
 integrity-checked patch application, explicit commit metadata, and a fail-closed working-tree
 safety gate. Every text patch consumes a Phase 15 Repair Gate authorization; unrelated changes
 must be acknowledged path by path and are never included in the reviewed commit. The

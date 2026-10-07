@@ -524,4 +524,194 @@ GitResult<CommitReceipt> GitRepository::commit(const CommitRequest& request) con
     return CommitReceipt{finalState.head, finalState.branch, paths};
 }
 
+namespace {
+
+bool safeRemote(const QString& remote) {
+    return !remote.isEmpty() && !remote.startsWith(u'-') &&
+           std::all_of(remote.cbegin(), remote.cend(),
+                       [](QChar c) { return c.isLetterOrNumber() || c == u'-' || c == u'_'; });
+}
+
+bool protectedBranch(const QString& branch) {
+    return branch.compare(QStringLiteral("main"), Qt::CaseInsensitive) == 0 ||
+           branch.compare(QStringLiteral("master"), Qt::CaseInsensitive) == 0;
+}
+
+std::optional<GitError> validateBranch(const QString& root, const QString& branch) {
+    if (branch.isEmpty() || branch.startsWith(u'-') || branch == QStringLiteral("HEAD")) {
+        return GitError{
+            GitErrorCode::InvalidBranch, QStringLiteral("An explicit branch is required."), {}};
+    }
+    const auto result = runGit(
+        root, {QStringLiteral("check-ref-format"), QStringLiteral("refs/heads/%1").arg(branch)});
+    if (const auto* error = std::get_if<GitError>(&result)) {
+        return *error;
+    }
+    if (std::get<ProcessResult>(result).exitCode != 0) {
+        return GitError{
+            GitErrorCode::InvalidBranch, QStringLiteral("The branch name is invalid."), {}};
+    }
+    return std::nullopt;
+}
+
+std::optional<GitError> runOperation(const QString& root, const QStringList& arguments,
+                                     const QString& action, int timeout = 15'000) {
+    const auto result = runGit(root, arguments, {}, timeout);
+    if (const auto* error = std::get_if<GitError>(&result)) {
+        return *error;
+    }
+    if (std::get<ProcessResult>(result).exitCode != 0) {
+        return processFailure(std::get<ProcessResult>(result), action);
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::optional<GitError> GitRepository::createContributionBranch(const QString& branch) const {
+    if (const auto error = validateBranch(rootPath_, branch)) {
+        return error;
+    }
+    if (protectedBranch(branch)) {
+        return GitError{GitErrorCode::InvalidBranch,
+                        QStringLiteral("Contributions require a feature branch."),
+                        {}};
+    }
+    const auto state = snapshot();
+    if (const auto* error = std::get_if<GitError>(&state)) {
+        return *error;
+    }
+    if (!std::get<RepositorySnapshot>(state).isClean()) {
+        return GitError{GitErrorCode::UnsafeWorkingTree,
+                        QStringLiteral("Create the contribution branch before applying repairs."),
+                        {}};
+    }
+    return runOperation(rootPath_, {QStringLiteral("switch"), QStringLiteral("-c"), branch},
+                        QStringLiteral("create the contribution branch"));
+}
+
+std::optional<GitError> GitRepository::fetch(const QString& remote) const {
+    if (!safeRemote(remote)) {
+        return GitError{GitErrorCode::RemoteMismatch,
+                        QStringLiteral("A configured remote name is required."),
+                        {}};
+    }
+    return runOperation(rootPath_, {QStringLiteral("fetch"), QStringLiteral("--no-tags"), remote},
+                        QStringLiteral("fetch the remote"), 45'000);
+}
+
+GitResult<RemoteTracking> GitRepository::remoteTracking(const QString& remote,
+                                                        const QString& branch) const {
+    if (!safeRemote(remote)) {
+        return GitError{GitErrorCode::RemoteMismatch,
+                        QStringLiteral("A configured remote name is required."),
+                        {}};
+    }
+    if (const auto error = validateBranch(rootPath_, branch)) {
+        return *error;
+    }
+    const auto localRef = QStringLiteral("refs/heads/%1").arg(branch);
+    const auto remoteRef = QStringLiteral("refs/remotes/%1/%2").arg(remote, branch);
+    const auto localResult =
+        runGit(rootPath_, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), localRef});
+    const auto remoteResult =
+        runGit(rootPath_, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), remoteRef});
+    if (const auto* error = std::get_if<GitError>(&localResult)) {
+        return *error;
+    }
+    if (const auto* error = std::get_if<GitError>(&remoteResult)) {
+        return *error;
+    }
+    if (std::get<ProcessResult>(localResult).exitCode != 0 ||
+        std::get<ProcessResult>(remoteResult).exitCode != 0) {
+        return GitError{
+            GitErrorCode::RemoteMismatch,
+            QStringLiteral("Fetch an existing local and remote branch before tracking."),
+            {}};
+    }
+    const auto counts = runGit(
+        rootPath_, {QStringLiteral("rev-list"), QStringLiteral("--left-right"),
+                    QStringLiteral("--count"), localRef + QStringLiteral("...") + remoteRef});
+    if (const auto* error = std::get_if<GitError>(&counts)) {
+        return *error;
+    }
+    const auto& result = std::get<ProcessResult>(counts);
+    if (result.exitCode != 0) {
+        return processFailure(result, QStringLiteral("compare remote commits"));
+    }
+    const auto values = result.standardOutput.trimmed().split('\t');
+    if (values.size() != 2) {
+        return GitError{
+            GitErrorCode::ProcessFailed, QStringLiteral("Git returned invalid tracking data."), {}};
+    }
+    return RemoteTracking{
+        remote,
+        branch,
+        QString::fromUtf8(std::get<ProcessResult>(localResult).standardOutput).trimmed(),
+        QString::fromUtf8(std::get<ProcessResult>(remoteResult).standardOutput).trimmed(),
+        values[0].toInt(),
+        values[1].toInt()};
+}
+
+std::optional<GitError> GitRepository::sync(const QString& remote, const QString& branch) const {
+    if (!safeRemote(remote)) {
+        return GitError{GitErrorCode::RemoteMismatch,
+                        QStringLiteral("A configured remote name is required."),
+                        {}};
+    }
+    if (const auto error = validateBranch(rootPath_, branch)) {
+        return error;
+    }
+    const auto state = snapshot();
+    if (const auto* error = std::get_if<GitError>(&state)) {
+        return *error;
+    }
+    const auto& snapshot = std::get<RepositorySnapshot>(state);
+    if (!snapshot.isClean() || snapshot.branch != std::optional<QString>(branch)) {
+        return GitError{
+            GitErrorCode::UnsafeWorkingTree,
+            QStringLiteral("Sync requires the requested branch and a clean working tree."),
+            {}};
+    }
+    if (const auto error = fetch(remote)) {
+        return error;
+    }
+    return runOperation(rootPath_,
+                        {QStringLiteral("merge"), QStringLiteral("--ff-only"),
+                         QStringLiteral("refs/remotes/%1/%2").arg(remote, branch)},
+                        QStringLiteral("fast-forward the branch"));
+}
+
+std::optional<GitError> GitRepository::pushContribution(const CommitReceipt& receipt,
+                                                        const QString& remote) const {
+    if (!safeRemote(remote) || !receipt.branch.has_value() || receipt.committedPaths.isEmpty()) {
+        return GitError{GitErrorCode::RemoteMismatch,
+                        QStringLiteral("Push requires a reviewed commit and configured remote."),
+                        {}};
+    }
+    if (const auto error = validateBranch(rootPath_, *receipt.branch)) {
+        return error;
+    }
+    if (protectedBranch(*receipt.branch)) {
+        return GitError{
+            GitErrorCode::InvalidBranch,
+            QStringLiteral("Direct contribution pushes to main or master are disabled."),
+            {}};
+    }
+    const auto state = snapshot();
+    if (const auto* error = std::get_if<GitError>(&state)) {
+        return *error;
+    }
+    const auto& snapshot = std::get<RepositorySnapshot>(state);
+    if (snapshot.head != receipt.head || snapshot.branch != receipt.branch) {
+        return GitError{GitErrorCode::SourceChanged,
+                        QStringLiteral("HEAD or branch changed after the reviewed commit."),
+                        {}};
+    }
+    return runOperation(rootPath_,
+                        {QStringLiteral("push"), QStringLiteral("--set-upstream"), remote,
+                         QStringLiteral("refs/heads/%1:refs/heads/%1").arg(*receipt.branch)},
+                        QStringLiteral("push the contribution branch"), 45'000);
+}
+
 } // namespace loreforge::git

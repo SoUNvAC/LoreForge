@@ -88,3 +88,11 @@ acknowledged, and `git commit --only` keeps acknowledged-but-unreviewed paths ou
 Defects are repaired in the module that owns them. Upper layers must not compensate for
 known lower-layer defects. Original imported text is immutable, and derived artifacts
 must carry provenance.
+
+Phase 17 extends the `git` adapter with contribution branches, fetch, fast-forward sync,
+non-forced branch push, and ahead/behind commit tracking. `IGitHubAuthentication` and
+`IGitHubClient` isolate credentials and GitHub operations from callers. `GitHubClient` uses
+asynchronous Qt Network requests; PR creation first verifies that the remote branch SHA matches
+the reviewed commit. PR preparation binds the description to the exact committed repair paths,
+includes audit reasons and source hashes, and defaults to a draft. Network errors never expose
+tokens or raw server diagnostics. No remote API changes canonical source or merges a PR.

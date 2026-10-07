@@ -23,6 +23,8 @@ enum class GitErrorCode {
     IoError,
     UnsafeWorkingTree,
     NothingToCommit,
+    InvalidBranch,
+    RemoteMismatch,
 };
 
 struct GitError final {
@@ -92,6 +94,15 @@ struct CommitReceipt final {
     friend bool operator==(const CommitReceipt&, const CommitReceipt&) = default;
 };
 
+struct RemoteTracking final {
+    QString remote;
+    QString branch;
+    QString localHead;
+    QString remoteHead;
+    int ahead = 0;
+    int behind = 0;
+};
+
 class GitRepository final {
   public:
     [[nodiscard]] static GitResult<GitRepository> discover(const QString& path);
@@ -105,6 +116,15 @@ class GitRepository final {
                  const proofreading::PatchAuthorization& authorization) const;
     [[nodiscard]] std::optional<GitError> applyPatch(const PreparedPatch& patch) const;
     [[nodiscard]] GitResult<CommitReceipt> commit(const CommitRequest& request) const;
+    [[nodiscard]] std::optional<GitError> createContributionBranch(const QString& branch) const;
+    [[nodiscard]] std::optional<GitError>
+    fetch(const QString& remote = QStringLiteral("origin")) const;
+    [[nodiscard]] GitResult<RemoteTracking> remoteTracking(const QString& remote,
+                                                           const QString& branch) const;
+    [[nodiscard]] std::optional<GitError> sync(const QString& remote, const QString& branch) const;
+    [[nodiscard]] std::optional<GitError>
+    pushContribution(const CommitReceipt& receipt,
+                     const QString& remote = QStringLiteral("origin")) const;
 
   private:
     explicit GitRepository(QString rootPath);
