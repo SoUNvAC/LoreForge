@@ -27,11 +27,13 @@ class MainWindow final : public QMainWindow {
     explicit MainWindow(QWidget* parent = nullptr);
 
     [[nodiscard]] bool openProjectFile(QStringView filePath);
+    [[nodiscard]] bool importMarkdownSource(QStringView sourcePath, QStringView projectPath);
     void inspectContext(const context::ContextInspectorData& context);
     void inspectRepairQueue(QList<proofreading::RepairQueueItem> items);
 
   private slots:
     void chooseProjectFile();
+    void chooseMarkdownSource();
     void selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void approveRepairCandidate(QString candidateId);

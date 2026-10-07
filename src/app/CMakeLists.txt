@@ -24,6 +24,7 @@ target_link_libraries(
     LoreForgeDesktopUi
     PUBLIC
         LoreForge::Storage
+        LoreForge::Parser
         LoreForge::Proofreading
         LoreForge::Context
         LoreForge::Text

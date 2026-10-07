@@ -8,6 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
+Maintained Markdown source trees are the primary desktop import workflow. Use
+**File > Import Markdown Source** with a directory containing `SUMMARY.md`, then
+save a new `.loreforge` project outside that source tree. TOC order, volume labels,
+stable path-based chapter IDs and per-file UTF-8 provenance are preserved. Website
+pages and illustrations stay outside narrative analysis. See [Markdown source import](docs/markdown-source-import.md).
+
 Phase 21 adds a versioned bilingual golden corpus and model regression suite with per-case and
 aggregate dialogue, speaker, entity, event, unsupported-claim, context, proofreading, token and
 latency metrics. Durable provenance-bound reports, cost/quality gates and explicit human review

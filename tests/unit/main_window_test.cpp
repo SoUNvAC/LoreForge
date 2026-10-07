@@ -1,5 +1,6 @@
 #include "document_fixture.h"
 #include "main_window.h"
+#include "markdown_source_fixture.h"
 #include "repair_queue_widget.h"
 
 #include "loreforge/storage/book_repository.h"
@@ -13,6 +14,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStatusBar>
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
@@ -33,6 +35,7 @@ class MainWindowTest final : public QObject {
     void rendersInspectableContext();
     void presentsAndControlsTheRepairQueue();
     void loadsAndPersistsRepairQueueFromStoredProject();
+    void importsMarkdownSourceAndReopensProject();
 };
 
 namespace {
@@ -84,6 +87,41 @@ loreforge::proofreading::ProofreadingCandidate storedRepairCandidate() {
 }
 
 } // namespace
+
+void MainWindowTest::importsMarkdownSourceAndReopensProject() {
+    QTemporaryDir source;
+    QTemporaryDir destination;
+    QVERIFY(source.isValid());
+    QVERIFY(destination.isValid());
+    QVERIFY(loreforge::test::createMarkdownFixture(source.path()));
+    const auto path = destination.filePath(QStringLiteral("novel.loreforge"));
+    loreforge::app::MainWindow window;
+    QVERIFY(window.findChild<QAction*>(QStringLiteral("importMarkdownSourceAction")));
+    QVERIFY2(window.importMarkdownSource(source.path(), path),
+             qPrintable(window.statusBar()->currentMessage()));
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    QCOMPARE(tree->topLevelItemCount(), 3);
+    QCOMPARE(tree->topLevelItem(0)->text(0), QStringLiteral("第二卷 / 后写的章节"));
+    auto* reader = window.findChild<QTextBrowser*>(QStringLiteral("chapterReader"));
+    QVERIFY(reader->toPlainText().contains(QStringLiteral("她打开了一扇门。")));
+    QVERIFY(!reader->toPlainText().contains(QStringLiteral("title: 页面元数据")));
+    QFile original(source.filePath(QStringLiteral("02/010.md")));
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), loreforge::test::markdownFixtureChapter());
+    QVERIFY(!window.importMarkdownSource(source.path(), path));
+    QCOMPARE(tree->topLevelItemCount(), 3);
+    QVERIFY(!window.importMarkdownSource(source.path(),
+                                         source.filePath(QStringLiteral("unsafe.loreforge"))));
+    QVERIFY(!QFileInfo::exists(source.filePath(QStringLiteral("unsafe.loreforge"))));
+    QVERIFY(window.openProjectFile(path));
+    QCOMPARE(tree->topLevelItemCount(), 3);
+    QVERIFY(loreforge::test::writeMarkdownFixtureFile(source.path(), QStringLiteral("02/002.md"),
+                                                      QByteArray("\xff", 1)));
+    const auto failedPath = destination.filePath(QStringLiteral("failed.loreforge"));
+    QVERIFY(!window.importMarkdownSource(source.path(), failedPath));
+    QVERIFY(!QFileInfo::exists(failedPath));
+    QCOMPARE(tree->topLevelItemCount(), 3);
+}
 
 void MainWindowTest::displaysStoredWorkspaceWithoutReorderingDomainData() {
     QTemporaryDir directory;

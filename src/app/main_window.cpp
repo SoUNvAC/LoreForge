@@ -2,12 +2,16 @@
 
 #include "context_inspector.h"
 #include "document_metrics.h"
+#include "loreforge/parser/markdown_source_parser.h"
+#include "loreforge/storage/book_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/repair_queue_repository.h"
 #include "repair_queue_widget.h"
 
 #include <QAction>
+#include <QDir>
 #include <QDockWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -17,6 +21,7 @@
 #include <QMessageBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -79,7 +84,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     openAction->setObjectName(QStringLiteral("openProjectAction"));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::chooseProjectFile);
-    menuBar()->addMenu(tr("&File"))->addAction(openAction);
+    auto* fileMenu = menuBar()->addMenu(tr("&File"));
+    auto* importAction = new QAction(tr("Import Markdown Source..."), this);
+    importAction->setObjectName(QStringLiteral("importMarkdownSourceAction"));
+    connect(importAction, &QAction::triggered, this, &MainWindow::chooseMarkdownSource);
+    fileMenu->addAction(importAction);
+    fileMenu->addAction(openAction);
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
 
     auto* central = new QWidget(this);
@@ -111,7 +121,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* details = new QWidget(splitter);
     auto* detailsLayout = new QVBoxLayout(details);
     detailsLayout->setContentsMargins(0, 0, 0, 0);
-    documentSummary_ = new QLabel(tr("Open a stored LoreForge project to begin."), details);
+    documentSummary_ =
+        new QLabel(tr("Import a Markdown source directory or open a stored project."), details);
     documentSummary_->setObjectName(QStringLiteral("documentSummary"));
     documentSummary_->setWordWrap(true);
     documentSummary_->setStyleSheet(QStringLiteral("font-size:16px;font-weight:600;"));
@@ -143,7 +154,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     reader_ = new QTextBrowser(details);
     reader_->setObjectName(QStringLiteral("chapterReader"));
     reader_->setHtml(
-        tr("<h2>LoreForge</h2><p>Use File &gt; Open Project to inspect stored data.</p>"));
+        tr("<h2>LoreForge</h2><p>Use File &gt; Import Markdown Source to read a maintained "
+           "novel directory containing SUMMARY.md, or Open Project to inspect stored data.</p>"));
     detailsLayout->addWidget(panel(tr("Reader"), reader_, details), 1);
     splitter->addWidget(details);
     splitter->setStretchFactor(0, 0);
@@ -184,6 +196,87 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 void MainWindow::inspectContext(const context::ContextInspectorData& context) {
     contextInspector_->inspect(context);
+}
+
+bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projectPath) {
+    auto parsed = parser::MarkdownSourceParser::parseDirectory(sourcePath);
+    const auto fail = [this](const QString& message) {
+        // A failed import leaves the currently opened project usable.
+        statusBar()->showMessage(tr("Import failed: %1").arg(message));
+        return false;
+    };
+    if (const auto* error = std::get_if<parser::MarkdownSourceError>(&parsed)) {
+        return fail(error->message);
+    }
+    const auto& imported = std::get<parser::MarkdownSourceImport>(parsed);
+    QFileInfo target(projectPath.toString());
+    const auto parent = QFileInfo(target.absolutePath()).canonicalFilePath();
+    if (projectPath.isEmpty() || target.exists() || parent.isEmpty()) {
+        return fail(tr("Choose a new project file in an existing directory; existing files are "
+                       "never overwritten."));
+    }
+    const auto relative = QDir(imported.document.metadata.sourceLocator).relativeFilePath(parent);
+    if (!QDir::isAbsolutePath(relative) && relative != QStringLiteral("..") &&
+        !relative.startsWith(QStringLiteral("../"))) {
+        return fail(tr("Save the project outside the read-only novel source directory."));
+    }
+    // Stage in the destination filesystem; publish only after every repository write succeeds.
+    QTemporaryDir staging(QDir(parent).filePath(QStringLiteral(".loreforge-import-XXXXXX")));
+    if (!staging.isValid()) {
+        return fail(tr("Could not create an import staging directory."));
+    }
+    const auto stagedPath = staging.filePath(QStringLiteral("project.loreforge"));
+    auto created = storage::ProjectDatabase::create(stagedPath);
+    if (const auto* error = std::get_if<storage::StorageError>(&created)) {
+        return fail(error->message);
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(created));
+    storage::ProjectRepository projects(*database);
+    storage::BookRepository books(*database);
+    const auto projectId = core::ProjectId::fromStableKey(target.absoluteFilePath());
+    if (const auto error = projects.create(
+            {projectId, imported.document.metadata.title, QDateTime::currentDateTimeUtc()})) {
+        return fail(error->message);
+    }
+    if (const auto error = books.saveDocument(projectId, imported.document)) {
+        return fail(error->message);
+    }
+    auto loaded = ProjectWorkspaceLoader::load(*database);
+    if (const auto* error = std::get_if<storage::StorageError>(&loaded)) {
+        return fail(error->message);
+    }
+    auto workspace = std::get<StoredWorkspace>(std::move(loaded));
+    database.reset();
+    if (!QFile::rename(stagedPath, target.absoluteFilePath())) {
+        return fail(tr("Could not publish the imported project; no existing file was replaced."));
+    }
+    openedDatabasePath_ = target.absoluteFilePath();
+    workspace.databasePath = openedDatabasePath_;
+    repairQueue_->setItems({});
+    setWorkspace(std::move(workspace));
+    statusBar()->showMessage(
+        tr("Imported %1 volumes, %2 chapters; %3 supplementary entries excluded. Source unchanged.")
+            .arg(imported.volumeCount)
+            .arg(imported.document.chapters.size())
+            .arg(imported.excludedPaths.size()));
+    return true;
+}
+
+void MainWindow::chooseMarkdownSource() {
+    const auto source =
+        QFileDialog::getExistingDirectory(this, tr("Select Markdown novel source (SUMMARY.md)"));
+    if (source.isEmpty()) {
+        return;
+    }
+    const auto destination = QFileDialog::getSaveFileName(
+        this, tr("Save imported project outside the source directory"),
+        QStringLiteral("novel.loreforge"), tr("LoreForge projects (*.loreforge)"));
+    if (destination.isEmpty()) {
+        return;
+    }
+    if (!importMarkdownSource(source, destination)) {
+        QMessageBox::warning(this, tr("Markdown import failed"), statusBar()->currentMessage());
+    }
 }
 
 void MainWindow::inspectRepairQueue(QList<proofreading::RepairQueueItem> items) {

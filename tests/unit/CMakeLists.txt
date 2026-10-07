@@ -52,6 +52,7 @@ loreforge_add_unit_test(LoreForgeDocumentModelTests document_model_test.cpp)
 loreforge_add_unit_test(LoreForgeDocumentJsonCodecTests document_json_codec_test.cpp)
 loreforge_add_unit_test(LoreForgeTextProcessingTests text_processing_test.cpp LoreForge::Text)
 loreforge_add_unit_test(LoreForgePlainTextParserTests plain_text_parser_test.cpp LoreForge::Parser)
+loreforge_add_unit_test(LoreForgeMarkdownSourceParserTests markdown_source_parser_test.cpp LoreForge::Parser)
 
 qt_add_executable(LoreForgeInferenceContractTests inference_contract_test.cpp)
 target_link_libraries(
