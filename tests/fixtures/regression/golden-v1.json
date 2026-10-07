@@ -1,0 +1,81 @@
+{
+  "format": "loreforge-golden-corpus-v1",
+  "id": "loreforge-handcrafted-narrative",
+  "version": "1",
+  "cases": [
+    {
+      "id": "attributed-dialogue-en",
+      "tags": ["english", "dialogue", "speaker", "entities", "events"],
+      "source": "Mara said: \"Go.\" Ivo opened the gate.",
+      "segments": [
+        {"text": "Mara said: ", "type": "narration", "speaker": null},
+        {"text": "\"Go.\"", "type": "dialogue", "speaker": "Mara"},
+        {"text": " Ivo opened the gate.", "type": "narration", "speaker": null}
+      ],
+      "entities": {"required": ["Mara", "Ivo", "gate"], "allowed": ["Mara", "Ivo", "gate"]},
+      "events": {"required": ["Ivo.opens.gate"], "allowed": ["Ivo.opens.gate"]},
+      "context": {"required": ["Mara.speaks", "Ivo.opens.gate"], "allowed": ["Mara.speaks", "Ivo.opens.gate"]},
+      "edits": []
+    },
+    {
+      "id": "unknown-speaker-zh",
+      "tags": ["chinese", "unicode", "unknown-speaker", "dialogue"],
+      "source": "天亮了。\n“走吧。”\n",
+      "segments": [
+        {"text": "天亮了。\n", "type": "narration", "speaker": null},
+        {"text": "“走吧。”", "type": "dialogue", "speaker": null},
+        {"text": "\n", "type": "narration", "speaker": null}
+      ],
+      "entities": {"required": [], "allowed": []},
+      "events": {"required": ["dawn"], "allowed": ["dawn"]},
+      "context": {"required": ["speaker.unknown"], "allowed": ["speaker.unknown"]},
+      "edits": []
+    },
+    {
+      "id": "intentional-terms-zh",
+      "tags": ["chinese", "protected-terms", "narration-only", "no-repair"],
+      "source": "阿岚走进星阙。星阙是此处的正式名称。",
+      "segments": [{"text": "阿岚走进星阙。星阙是此处的正式名称。", "type": "narration", "speaker": null}],
+      "entities": {"required": ["阿岚", "星阙"], "allowed": ["阿岚", "星阙"]},
+      "events": {"required": ["阿岚.enters.星阙"], "allowed": ["阿岚.enters.星阙"]},
+      "context": {"required": ["星阙.canonical"], "allowed": ["星阙.canonical"]},
+      "edits": []
+    },
+    {
+      "id": "duplicate-word-en",
+      "tags": ["english", "proofreading", "duplicate-word", "narration-only"],
+      "source": "Ivo opened the the door.",
+      "segments": [{"text": "Ivo opened the the door.", "type": "narration", "speaker": null}],
+      "entities": {"required": ["Ivo", "door"], "allowed": ["Ivo", "door"]},
+      "events": {"required": ["Ivo.opens.door"], "allowed": ["Ivo.opens.door"]},
+      "context": {"required": ["door.open"], "allowed": ["door.open"]},
+      "edits": [{"original": "the the", "replacement": "the", "occurrence": 0}]
+    },
+    {
+      "id": "flashback-context-zh",
+      "tags": ["chinese", "flashback", "context", "speaker"],
+      "source": "阿岚已经死去。回忆中，他说：“别开门。”",
+      "segments": [
+        {"text": "阿岚已经死去。回忆中，他说：", "type": "narration", "speaker": null},
+        {"text": "“别开门。”", "type": "dialogue", "speaker": "阿岚"}
+      ],
+      "entities": {"required": ["阿岚"], "allowed": ["阿岚", "门"]},
+      "events": {"required": ["阿岚.dead.present", "阿岚.speaks.flashback"], "allowed": ["阿岚.dead.present", "阿岚.speaks.flashback"]},
+      "context": {"required": ["speech.before.death", "no.unexplained.revival"], "allowed": ["speech.before.death", "no.unexplained.revival"]},
+      "edits": []
+    },
+    {
+      "id": "typo-and-secret-zh",
+      "tags": ["chinese", "proofreading", "typo", "knowledge-access", "dialogue"],
+      "source": "林尚不知道钥匙在哪。阿岚说：“我己经找到钥匙。”",
+      "segments": [
+        {"text": "林尚不知道钥匙在哪。阿岚说：", "type": "narration", "speaker": null},
+        {"text": "“我己经找到钥匙。”", "type": "dialogue", "speaker": "阿岚"}
+      ],
+      "entities": {"required": ["林", "阿岚", "钥匙"], "allowed": ["林", "阿岚", "钥匙"]},
+      "events": {"required": ["阿岚.found.钥匙"], "allowed": ["阿岚.found.钥匙"]},
+      "context": {"required": ["林.key.location.unknown", "阿岚.key.location.known"], "allowed": ["林.key.location.unknown", "阿岚.key.location.known"]},
+      "edits": [{"original": "己经", "replacement": "已经", "occurrence": 0}]
+    }
+  ]
+}

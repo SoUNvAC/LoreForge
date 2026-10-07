@@ -125,3 +125,13 @@ original finding as an explained diagnostic. Canonical input hashes bind review 
 cache receipts to the precise facts, source projections and checker version. Normalized life,
 knowledge and travel facts are supplied through an explicit adapter boundary, not manufactured
 by scanning existing free-text events. No schema migration or automatic repair is introduced.
+
+Phase 21 adds the provider-neutral `regression` domain. `ModelRegressionSuite` validates a
+versioned exact-source golden corpus and independently captured, normalized backend observations,
+reuses dialogue validation and computes ten quality/cost metrics (including safety recall for
+proofreading). Canonical run receipts bind model revision, task/configuration hashes, source/context
+snapshots and retained response captures. Comparison requires identical experimental inputs and
+checks per-case as well as aggregate thresholds. Durable JSON reports detect stale or inconsistent
+data. The promotion gate recalculates results and consumes explicit hash-scoped human review;
+it emits a receipt, never changes model configuration. Captures remain behind existing inference
+and Context Engine adapters. Offline synthetic tests verify the evaluator, not real model quality.

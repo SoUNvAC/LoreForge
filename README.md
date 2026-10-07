@@ -8,6 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
+Phase 21 adds a versioned bilingual golden corpus and model regression suite with per-case and
+aggregate dialogue, speaker, entity, event, unsupported-claim, context, proofreading, token and
+latency metrics. Durable provenance-bound reports, cost/quality gates and explicit human review
+protect model promotion. Offline tests use synthetic captures; they do not certify or switch a
+real backend. See [model regression](docs/model-regression.md). The planned Phase 0–21 baseline
+is implemented; real-model qualification and production integration still require their own review.
 Phase 20 adds source-backed narrative integrity diagnostics for existence, death/speech,
 character-specific knowledge, directed travel and canonical name variants. Explicit story time
 supports flashbacks, evidence-backed exceptions remain auditable, and missing facts produce
