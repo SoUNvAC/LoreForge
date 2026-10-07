@@ -110,6 +110,8 @@ class GitRepository final {
     [[nodiscard]] const QString& rootPath() const noexcept;
     [[nodiscard]] GitResult<RepositorySnapshot> snapshot() const;
     [[nodiscard]] GitResult<QString> diff(const QStringList& paths = {}) const;
+    [[nodiscard]] GitResult<QByteArray> readCommittedFile(const QString& ref,
+                                                          const QString& relativePath) const;
 
     [[nodiscard]] GitResult<PreparedPatch>
     preparePatch(const QString& relativePath,

@@ -15,6 +15,9 @@ class StoryStateRepository final {
     explicit StoryStateRepository(ProjectDatabase& database);
 
     [[nodiscard]] StorageStatus saveChapterRecord(const narrative::ChapterMemoryRecord& record);
+    [[nodiscard]] StorageStatus invalidateChapterRecords(const core::ProjectId& projectId,
+                                                         const QList<core::ChapterId>& chapterIds,
+                                                         qsizetype snapshotsFromSequence);
     [[nodiscard]] StorageResult<QList<narrative::ChapterMemoryRecord>>
     loadChapterRecords(const core::ProjectId& projectId, qsizetype throughChapterSequence) const;
     [[nodiscard]] StorageResult<narrative::StoryStateSnapshot>

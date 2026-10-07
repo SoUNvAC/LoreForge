@@ -70,6 +70,7 @@ target_link_libraries(
         LoreForge::Context
         LoreForge::Document
         LoreForge::Storage
+        LoreForge::Git
         LoreForge::ProjectOptions
         Qt6::Sql
         Qt6::Test

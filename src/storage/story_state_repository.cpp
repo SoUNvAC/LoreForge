@@ -98,6 +98,74 @@ StoryStateRepository::saveChapterRecord(const narrative::ChapterMemoryRecord& re
     });
 }
 
+StorageStatus
+StoryStateRepository::invalidateChapterRecords(const core::ProjectId& projectId,
+                                               const QList<core::ChapterId>& chapterIds,
+                                               qsizetype snapshotsFromSequence) {
+    if (!projectId.isValid() || snapshotsFromSequence < 0) {
+        return invalid(QStringLiteral("A valid project and snapshot cutoff are required."));
+    }
+    return database_.runInTransaction([this, &projectId, &chapterIds,
+                                       snapshotsFromSequence]() -> StorageStatus {
+        auto connection = database_.database();
+        // Validate the whole scope before deleting any derived artifacts.
+        QSqlQuery project(connection);
+        project.prepare(QStringLiteral("SELECT 1 FROM projects WHERE id = ?"));
+        project.addBindValue(projectId.toString());
+        if (!project.exec()) {
+            return queryError(QStringLiteral("Invalidation project could not be verified."),
+                              project.lastError());
+        }
+        if (!project.next()) {
+            return invalid(QStringLiteral("Invalidation project does not exist."));
+        }
+        for (const auto& id : chapterIds) {
+            if (!id.isValid()) {
+                return invalid(QStringLiteral("Invalidation requires valid chapter IDs."));
+            }
+            QSqlQuery ownership(connection);
+            ownership.prepare(QStringLiteral(
+                "SELECT r.chapter_sequence FROM chapters c JOIN books b ON b.id = c.book_id "
+                "LEFT JOIN chapter_memory_records r ON r.chapter_id = c.id AND r.project_id = "
+                "b.project_id "
+                "WHERE c.id = ? AND b.project_id = ?"));
+            ownership.addBindValue(id.toString());
+            ownership.addBindValue(projectId.toString());
+            if (!ownership.exec()) {
+                return queryError(QStringLiteral("Invalidation scope could not be verified."),
+                                  ownership.lastError());
+            }
+            if (!ownership.next() || (!ownership.value(0).isNull() &&
+                                      ownership.value(0).toLongLong() < snapshotsFromSequence)) {
+                return invalid(QStringLiteral(
+                    "Invalidation chapter ownership or snapshot cutoff is inconsistent."));
+            }
+        }
+        for (const auto& id : chapterIds) {
+            QSqlQuery remove(connection);
+            remove.prepare(QStringLiteral(
+                "DELETE FROM chapter_memory_records WHERE project_id = ? AND chapter_id = ?"));
+            remove.addBindValue(projectId.toString());
+            remove.addBindValue(id.toString());
+            if (!remove.exec()) {
+                return queryError(
+                    QStringLiteral("Stale chapter analysis could not be invalidated."),
+                    remove.lastError());
+            }
+        }
+        QSqlQuery snapshots(connection);
+        snapshots.prepare(QStringLiteral("DELETE FROM story_state_snapshots WHERE project_id = ? "
+                                         "AND through_chapter_sequence >= ?"));
+        snapshots.addBindValue(projectId.toString());
+        snapshots.addBindValue(static_cast<qlonglong>(snapshotsFromSequence));
+        if (!snapshots.exec()) {
+            return queryError(QStringLiteral("Stale story snapshots could not be invalidated."),
+                              snapshots.lastError());
+        }
+        return std::nullopt;
+    });
+}
+
 StorageResult<QList<narrative::ChapterMemoryRecord>>
 StoryStateRepository::loadChapterRecords(const core::ProjectId& projectId,
                                          qsizetype throughChapterSequence) const {

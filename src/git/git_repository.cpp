@@ -329,6 +329,37 @@ GitResult<QString> GitRepository::diff(const QStringList& paths) const {
     return QString::fromUtf8(result.standardOutput);
 }
 
+GitResult<QByteArray> GitRepository::readCommittedFile(const QString& ref,
+                                                       const QString& relativePath) const {
+    if (ref.isEmpty() || !isSafeRelativePath(relativePath)) {
+        return GitError{
+            GitErrorCode::InvalidPath,
+            QStringLiteral("A commit reference and repository-relative path are required."),
+            {relativePath}};
+    }
+    const auto resolved =
+        runGit(rootPath_, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                           QStringLiteral("--end-of-options"), ref + QStringLiteral("^{commit}")});
+    if (const auto* error = std::get_if<GitError>(&resolved)) {
+        return *error;
+    }
+    const auto& commit = std::get<ProcessResult>(resolved);
+    if (commit.exitCode != 0) {
+        return processFailure(commit, QStringLiteral("resolve the revision"));
+    }
+    const auto outcome = runGit(rootPath_, {QStringLiteral("cat-file"), QStringLiteral("blob"),
+                                            QString::fromUtf8(commit.standardOutput).trimmed() +
+                                                u':' + normalizedPath(relativePath)});
+    if (const auto* error = std::get_if<GitError>(&outcome)) {
+        return *error;
+    }
+    const auto& result = std::get<ProcessResult>(outcome);
+    if (result.exitCode != 0) {
+        return processFailure(result, QStringLiteral("read committed source bytes"));
+    }
+    return result.standardOutput;
+}
+
 GitResult<PreparedPatch>
 GitRepository::preparePatch(const QString& relativePath,
                             const proofreading::PatchAuthorization& authorization) const {

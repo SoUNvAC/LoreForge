@@ -2,6 +2,7 @@
 
 #include "loreforge/context/context_engine.h"
 #include "loreforge/document/document_json_codec.h"
+#include "loreforge/git/semantic_diff.h"
 #include "loreforge/inference/inference_types.h"
 #include "loreforge/inference/output_validator.h"
 #include "loreforge/storage/book_repository.h"
@@ -37,6 +38,7 @@ class StorageIntegrationTest final : public QObject {
     void persistsLLMRunsAcrossReopen();
     void preservesInspectableInferenceSnapshotsAcrossReopen();
     void persistsAndDeterministicallyRebuildsStoryState();
+    void appliesSemanticInvalidationWithoutChangingOriginalSource();
     void storesContextBeforeProducingBoundRequest();
     void persistsHumanRepairDecisionsAndProtectedTerms();
     void rejectsANewerSchemaVersion();
@@ -500,6 +502,70 @@ void StorageIntegrationTest::persistsAndDeterministicallyRebuildsStoryState() {
     QVERIFY(changedSnapshot.sourceHash != expected.sourceHash);
     QVERIFY(changedSnapshot.stateHash == expected.stateHash);
     QVERIFY(changedSnapshot.id != expected.id);
+}
+
+void StorageIntegrationTest::appliesSemanticInvalidationWithoutChangingOriginalSource() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    auto created = loreforge::storage::ProjectDatabase::create(
+        directory.filePath(u"semantic-invalidation.loreforge"_s));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()).has_value());
+    const auto document = loreforge::test::handcraftedDocument();
+    loreforge::storage::BookRepository books(*database);
+    QVERIFY(!books.saveDocument(projectRecord().id, document).has_value());
+    loreforge::storage::StoryStateRepository memory(*database);
+    const auto first = memoryRecord(projectRecord().id, document.chapters[0]);
+    const auto second = memoryRecord(projectRecord().id, document.chapters[1]);
+    QVERIFY(!memory.saveChapterRecord(first).has_value());
+    QVERIFY(!memory.saveChapterRecord(second).has_value());
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(
+        memory.rebuildAndSave(projectRecord().id, 0)));
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(
+        memory.rebuildAndSave(projectRecord().id, 1)));
+
+    loreforge::git::SourceRevision before{
+        document.metadata.sourceLocator,
+        loreforge::test::handcraftedSource(),
+        document.metadata.sourceHash,
+        {{first.analysis.chapterId, 0, first.analysis.sourceSpan, first.analysis},
+         {second.analysis.chapterId, 1, second.analysis.sourceSpan, second.analysis}}};
+    auto after = before;
+    after.utf8.replace("Goodbye.", "Farewell.");
+    after.sourceHash = loreforge::core::ContentHash::sha256(QByteArrayView(after.utf8));
+    after.chapters[1].sourceSpan.endByte += 1;
+    after.chapters[1].analysis.reset();
+    const auto compared = loreforge::git::SemanticDiffer::compare(before, after);
+    QVERIFY(std::holds_alternative<loreforge::git::SemanticDiffReport>(compared));
+    const auto& plan = std::get<loreforge::git::SemanticDiffReport>(compared).invalidation;
+    QCOMPARE(plan.analysisChapters, QList<loreforge::core::ChapterId>{second.analysis.chapterId});
+    QCOMPARE(plan.storyStateSnapshotsDirtyFrom, std::optional<qsizetype>(1));
+    const auto unknownChapter =
+        loreforge::core::ChapterId::fromStableKey(u"other-project-chapter"_s);
+    QVERIFY(memory
+                .invalidateChapterRecords(projectRecord().id,
+                                          {second.analysis.chapterId, unknownChapter}, 1)
+                .has_value());
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(
+        memory.loadSnapshot(projectRecord().id, 1)));
+    QVERIFY(!memory
+                 .invalidateChapterRecords(projectRecord().id, plan.analysisChapters,
+                                           *plan.storyStateSnapshotsDirtyFrom)
+                 .has_value());
+    const auto records = memory.loadChapterRecords(projectRecord().id, 1);
+    QVERIFY(std::holds_alternative<QList<loreforge::narrative::ChapterMemoryRecord>>(records));
+    QCOMPARE(std::get<QList<loreforge::narrative::ChapterMemoryRecord>>(records),
+             QList<loreforge::narrative::ChapterMemoryRecord>{first});
+    QVERIFY(std::holds_alternative<loreforge::narrative::StoryStateSnapshot>(
+        memory.loadSnapshot(projectRecord().id, 0)));
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(
+        memory.loadSnapshot(projectRecord().id, 1)));
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(
+        memory.rebuildAndSave(projectRecord().id, 1)));
+    const auto original = books.loadDocument(document.id);
+    QVERIFY(std::holds_alternative<loreforge::document::Document>(original));
+    QCOMPARE(std::get<loreforge::document::Document>(original), document);
 }
 
 void StorageIntegrationTest::storesContextBeforeProducingBoundRequest() {

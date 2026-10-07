@@ -227,6 +227,20 @@ void LocalGitIntegrationTest::refusesUnrelatedEditsAndCommitsOnlyReviewedPaths()
     });
     QVERIFY(notes != changes.cend());
     QVERIFY(notes->isUntracked());
+    const auto previousBytes = repository.readCommittedFile(u"HEAD^"_s, u"story/chapter.txt"_s);
+    const auto committedBytes = repository.readCommittedFile(u"HEAD"_s, u"story/chapter.txt"_s);
+    QVERIFY(std::holds_alternative<QByteArray>(previousBytes));
+    QVERIFY(std::holds_alternative<QByteArray>(committedBytes));
+    QCOMPARE(std::get<QByteArray>(previousBytes), chapter);
+    QCOMPARE(std::get<QByteArray>(committedBytes), QByteArray("Mara walks home.\n"));
+    QVERIFY(writeFile(QDir(directory.path()).filePath(u"story/chapter.txt"_s),
+                      QByteArray("working edit\n")));
+    QCOMPARE(std::get<QByteArray>(repository.readCommittedFile(u"HEAD"_s, u"story/chapter.txt"_s)),
+             QByteArray("Mara walks home.\n"));
+    QVERIFY(std::holds_alternative<loreforge::git::GitError>(
+        repository.readCommittedFile(u"HEAD"_s, u"../outside.txt"_s)));
+    QVERIFY(std::holds_alternative<loreforge::git::GitError>(
+        repository.readCommittedFile(u"HEAD"_s, u"story"_s)));
 }
 
 void LocalGitIntegrationTest::pushesReviewedFeatureBranchAndTracksRemote() {

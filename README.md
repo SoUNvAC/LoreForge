@@ -8,7 +8,12 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Phase 17 adds feature-branch contribution delivery, fast-forward remote synchronization,
+Phase 18 adds deterministic semantic revision reports: exact UTF-8 changed spans, changed
+chapters, potential entity/story impact, and scoped analysis invalidation. Fully covered,
+source-verified approved typo repairs are classified separately from semantic and unknown
+changes. Offset shifts invalidate provenance even when chapter content is unchanged. Derived
+analysis and dependent story snapshots can be invalidated atomically without altering imported
+source. Phase 17 provides feature-branch contribution delivery, fast-forward remote synchronization,
 remote commit tracking, generated draft PR descriptions, and an asynchronous GitHub REST
 adapter with replaceable authentication and commit/check/PR inspection. Contributions verify
 the reviewed local and pushed commit before publication. Git pushes use the user's configured

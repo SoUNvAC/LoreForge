@@ -96,3 +96,11 @@ asynchronous Qt Network requests; PR creation first verifies that the remote bra
 the reviewed commit. PR preparation binds the description to the exact committed repair paths,
 includes audit reasons and source hashes, and defaults to a draft. Network errors never expose
 tokens or raw server diagnostics. No remote API changes canonical source or merges a PR.
+
+Phase 18 adds `SemanticDiffer` to the Git domain boundary. It compares hash-verified UTF-8
+revisions and their stable chapter projections, producing exact old/new change spans, semantic
+classification, potential entity impact, and an explicit invalidation plan. Complete approved
+review coverage can certify typo/text-only revisions; missing coverage remains unknown, and
+entity evidence or changed analysis content can escalate a review's classification. Git blob
+reads remain in `GitRepository`. Storage executes scoped invalidation transactions and preserves
+original documents. Phase 19 will own dependency graphs and selective rebuilding.
