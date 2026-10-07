@@ -368,14 +368,21 @@ bool mappedBoundary(qint64 oldOffset, qint64 newOffset, const QList<ChangedSourc
 }
 
 bool namedEvidenceChanged(const narrative::ChapterAnalysis& analysis,
-                          const QList<ChangedSourceSpan>& changes, const SourceRevision& after) {
+                          const QList<ChangedSourceSpan>& changes, const SourceRevision& before,
+                          const SourceRevision& after) {
+    QList<ChangedSourceSpan> localizedChanges;
+    for (const auto& change : changes) {
+        localizedChanges.append(changedSpan(before, after, change.before.startByte,
+                                            change.before.endByte, change.after.startByte,
+                                            change.after.endByte));
+    }
     auto changed = [&](const QString& name, const narrative::ClaimSupport& support) {
         for (const auto& evidence : support.evidence) {
             if (evidence.text != name) {
                 continue;
             }
-            const auto start = mappedOffset(evidence.sourceSpan.startByte, changes);
-            const auto end = mappedOffset(evidence.sourceSpan.endByte, changes, true);
+            const auto start = mappedOffset(evidence.sourceSpan.startByte, localizedChanges);
+            const auto end = mappedOffset(evidence.sourceSpan.endByte, localizedChanges, true);
             if (!start || !end || *end < *start || *end > after.utf8.size() ||
                 after.utf8.sliced(*start, *end - *start) != name.toUtf8()) {
                 return true;
@@ -530,7 +537,7 @@ SemanticDiffer::compare(const SourceRevision& before, const SourceRevision& afte
             oldChapter && newChapter && oldChapter->analysis && newChapter->analysis &&
             semanticSignature(*oldChapter->analysis) != semanticSignature(*newChapter->analysis);
         if (oldChapter && oldChapter->analysis &&
-            namedEvidenceChanged(*oldChapter->analysis, report.changedSpans, after)) {
+            namedEvidenceChanged(*oldChapter->analysis, report.changedSpans, before, after)) {
             knownSemanticChange = true;
         }
         if (!textChanged && !provenanceChanged && !knownSemanticChange) {

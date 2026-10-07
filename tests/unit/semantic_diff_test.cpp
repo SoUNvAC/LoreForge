@@ -126,6 +126,11 @@ void SemanticDiffTest::distinguishesReviewedTyposFromUnknownAndSemanticChanges()
     auto semanticReview = review;
     semanticReview.candidate.semanticImpact = proofreading::SemanticImpact::ActionChange;
     QCOMPARE(compare(before, after, {semanticReview}).impact, RevisionImpact::SemanticChange);
+    auto analyzedBefore = before;
+    analyzedBefore.chapters[0].analysis = analysis(before, u"Mara"_s);
+    const auto contextualReview =
+        approved(analyzedBefore, 0, QString::fromUtf8(before.utf8), QString::fromUtf8(after.utf8));
+    QCOMPARE(compare(analyzedBefore, after, {contextualReview}).impact, RevisionImpact::TypoOnly);
 }
 
 void SemanticDiffTest::separatesMultipleRepairsAndTracksShiftedProvenance() {
