@@ -8,6 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
+Phase 20 adds source-backed narrative integrity diagnostics for existence, death/speech,
+character-specific knowledge, directed travel and canonical name variants. Explicit story time
+supports flashbacks, evidence-backed exceptions remain auditable, and missing facts produce
+notices instead of invented contradictions. Checks never rewrite source or guess temporal facts.
+See [narrative integrity](docs/narrative-integrity.md).
 Phase 19 adds content-addressed artifact dependencies, durable clean/dirty cache receipts,
 selective topological rebuilding and stale asynchronous-result rejection. Chapter-local parsing
 and analysis are reused when safe; dependent Story State and shifted evidence projections become

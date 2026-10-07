@@ -115,3 +115,13 @@ Worker tickets bind graph identity, ordered dependency hashes and unique serials
 rejects late results rather than publishing stale analysis. Payload persistence stays in the owning
 repositories; model execution remains behind the existing Context Engine gate. No source rewrite,
 new desktop action or SQLite migration is introduced.
+
+Phase 20 adds `NarrativeIntegrityChecker` in the `narrative` domain. Typed source-verified facts
+separate story chronology from chapter order and character knowledge from reader revelation.
+The checker reports existence, death/speech, knowledge-access, explicit directed-travel and name
+variant violations without mutating text. Missing constraints and identities remain notices;
+inferred claims preserve their basis and confidence. Scoped grounded exceptions retain the
+original finding as an explained diagnostic. Canonical input hashes bind review and incremental
+cache receipts to the precise facts, source projections and checker version. Normalized life,
+knowledge and travel facts are supplied through an explicit adapter boundary, not manufactured
+by scanning existing free-text events. No schema migration or automatic repair is introduced.

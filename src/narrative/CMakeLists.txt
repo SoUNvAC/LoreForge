@@ -4,6 +4,7 @@ qt_add_library(
     chapter_analyzer.cpp
     dialogue_extractor.cpp
     extraction_evaluator.cpp
+    integrity_checker.cpp
     narrative_types.cpp
     story_memory.cpp
     story_memory_json.cpp
