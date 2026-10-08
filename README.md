@@ -8,6 +8,10 @@ maintained with the project planning materials.
 
 ## Current baseline
 
+Cloud LLM desktop integration is at the proposal stage; model configuration and live
+chapter analysis are not yet connected to the GUI. See the
+[cloud LLM integration proposal](docs/llm-cloud-integration-plan.md) for scope, stages and acceptance gates.
+
 Maintained Markdown source trees are the primary desktop import workflow. Use
 **File > Import Markdown Source** with a directory containing `SUMMARY.md`, then
 save a new `.loreforge` project outside that source tree. TOC order, volume labels,
