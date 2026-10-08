@@ -1,4 +1,5 @@
 #include "document_fixture.h"
+#include "document_metrics.h"
 #include "main_window.h"
 #include "markdown_source_fixture.h"
 #include "repair_queue_widget.h"
@@ -36,6 +37,7 @@ class MainWindowTest final : public QObject {
     void presentsAndControlsTheRepairQueue();
     void loadsAndPersistsRepairQueueFromStoredProject();
     void importsMarkdownSourceAndReopensProject();
+    void countsOnlyParagraphCharacters();
 };
 
 namespace {
@@ -168,15 +170,19 @@ void MainWindowTest::displaysStoredWorkspaceWithoutReorderingDomainData() {
 
     QCOMPARE(chapterTree->topLevelItemCount(), 2);
     QCOMPARE(chapterTree->topLevelItem(0)->text(0), QStringLiteral("Chapter One"));
-    QCOMPARE(chapterTree->topLevelItem(0)->text(1), QStringLiteral("2"));
-    QCOMPARE(chapterTree->topLevelItem(0)->text(2), QStringLiteral("3"));
+    QCOMPARE(chapterTree->headerItem()->text(1), QStringLiteral("字数"));
+    QCOMPARE(chapterTree->headerItem()->text(2), QStringLiteral("汉字"));
+    QCOMPARE(chapterTree->topLevelItem(0)->text(1), QStringLiteral("10"));
+    QCOMPARE(chapterTree->topLevelItem(0)->text(2), QStringLiteral("0"));
+    QCOMPARE(chapterTree->topLevelItem(0)->text(3), QStringLiteral("3"));
     QCOMPARE(chapterTree->topLevelItem(1)->text(0), QStringLiteral("Chapter Two"));
-    QCOMPARE(chapterTree->topLevelItem(1)->text(1), QStringLiteral("1"));
-    QCOMPARE(chapterTree->topLevelItem(1)->text(2), QStringLiteral("2"));
+    QCOMPARE(chapterTree->topLevelItem(1)->text(1), QStringLiteral("7"));
+    QCOMPARE(chapterTree->topLevelItem(1)->text(2), QStringLiteral("0"));
+    QCOMPARE(chapterTree->topLevelItem(1)->text(3), QStringLiteral("2"));
 
     QVERIFY(workspaceStatus->text().contains(QStringLiteral("1 projects · 1 books")));
     QCOMPARE(workspaceStatus->toolTip(), databasePath);
-    QVERIFY(summary->text().contains(QStringLiteral("2 chapters, 3 words")));
+    QVERIFY(summary->text().contains(QStringLiteral("总字数：17 · 总汉字：0")));
     QVERIFY(bookMetadata->text().contains(QStringLiteral("LoreForge Tests")));
     QVERIFY(bookMetadata->text().contains(QStringLiteral("Language: en")));
     QVERIFY(sourceInfo->text().contains(QStringLiteral("Format: TXT")));
@@ -185,14 +191,30 @@ void MainWindowTest::displaysStoredWorkspaceWithoutReorderingDomainData() {
         loreforge::test::handcraftedDocument().metadata.sourceHash.toHex()));
     QVERIFY(chapterMetadata->text().contains(QStringLiteral("Chapter 1 of 2")));
     QVERIFY(chapterMetadata->text().contains(QStringLiteral("Blocks: 3")));
-    QVERIFY(chapterMetadata->text().contains(QStringLiteral("Words: 2")));
+    QVERIFY(chapterMetadata->text().contains(QStringLiteral("字数：10\n汉字：0")));
     QVERIFY(chapterStatus->text().contains(QStringLiteral("3 source spans")));
     QVERIFY(reader->toPlainText().contains(QStringLiteral("Hello, world.")));
 
     chapterTree->setCurrentItem(chapterTree->topLevelItem(1));
     QVERIFY(reader->toPlainText().contains(QStringLiteral("Goodbye.")));
     QVERIFY(chapterMetadata->text().contains(QStringLiteral("Chapter 2 of 2")));
-    QVERIFY(chapterMetadata->text().contains(QStringLiteral("Words: 1")));
+    QVERIFY(chapterMetadata->text().contains(QStringLiteral("字数：7\n汉字：0")));
+}
+
+void MainWindowTest::countsOnlyParagraphCharacters() {
+    auto doc = loreforge::test::handcraftedDocument();
+    doc.chapters[0].title = QStringLiteral("标题不应计入");
+    doc.chapters[0].blocks[0].text = QStringLiteral("标题中文 ABC 123");
+    doc.chapters[0].blocks[1].text = QStringLiteral("你好，world！2026");
+    doc.chapters[0].blocks[2].text = QStringLiteral("场景分隔不计入");
+    doc.chapters[1].blocks[1].text = QStringLiteral("再见。");
+    const auto chapter = loreforge::app::DocumentMetrics::forChapter(doc.chapters.first());
+    QCOMPARE(chapter.characterCount, 11);
+    QCOMPARE(chapter.hanCharacterCount, 2);
+    const auto totals = loreforge::app::DocumentMetrics::forDocument(doc);
+    QCOMPARE(totals.characterCount, 13);
+    QCOMPARE(totals.hanCharacterCount, 4);
+    QCOMPARE(totals.blockCount, 5);
 }
 
 void MainWindowTest::reportsProjectOpenFailuresInTheInterface() {

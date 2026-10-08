@@ -18,6 +18,19 @@ bool isApostrophe(char32_t codePoint) {
 
 } // namespace
 
+CharacterCounts WordCounter::countCharacters(QStringView text) {
+    CharacterCounts counts;
+    for (const auto codePoint : text.toString().toUcs4()) {
+        if (QChar::isLetterOrNumber(codePoint)) {
+            ++counts.total;
+            if (QChar::script(codePoint) == QChar::Script_Han) {
+                ++counts.han;
+            }
+        }
+    }
+    return counts;
+}
+
 qsizetype WordCounter::count(QStringView text) {
     const auto codePoints = text.toString().toUcs4();
     qsizetype words = 0;

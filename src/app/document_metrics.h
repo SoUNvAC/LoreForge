@@ -5,7 +5,8 @@
 namespace loreforge::app {
 
 struct ChapterMetrics final {
-    qsizetype wordCount = 0;
+    qsizetype characterCount = 0;
+    qsizetype hanCharacterCount = 0;
     qsizetype blockCount = 0;
     qsizetype sourceSpanCount = 0;
 
@@ -15,7 +16,7 @@ struct ChapterMetrics final {
 class DocumentMetrics final {
   public:
     [[nodiscard]] static ChapterMetrics forChapter(const document::Chapter& chapter);
-    [[nodiscard]] static qsizetype wordCount(const document::Document& document);
+    [[nodiscard]] static ChapterMetrics forDocument(const document::Document& document);
 };
 
 } // namespace loreforge::app

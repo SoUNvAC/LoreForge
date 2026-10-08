@@ -111,10 +111,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     chapterTree_ = new QTreeWidget;
     chapterTree_->setObjectName(QStringLiteral("chapterTree"));
-    chapterTree_->setHeaderLabels({tr("Chapter"), tr("Words"), tr("Blocks")});
+    chapterTree_->setHeaderLabels({tr("Chapter"), tr("字数"), tr("汉字"), tr("Blocks")});
+    const auto countPolicy =
+        tr("只统计正文，不含标题、标点、空白或符号。字数按字母和数字逐字符计；汉字仅计汉字。");
+    chapterTree_->headerItem()->setToolTip(1, countPolicy);
+    chapterTree_->headerItem()->setToolTip(2, countPolicy);
     chapterTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     chapterTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     chapterTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    chapterTree_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     chapterTree_->setMinimumWidth(310);
     splitter->addWidget(panel(tr("Chapter Tree"), chapterTree_, splitter));
 
@@ -527,17 +532,20 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
     chapterTree_->clear();
     for (const auto& chapter : book.chapters) {
         const auto metrics = DocumentMetrics::forChapter(chapter);
-        auto* item =
-            new QTreeWidgetItem(chapterTree_, {chapter.title, QString::number(metrics.wordCount),
-                                               QString::number(metrics.blockCount)});
+        auto* item = new QTreeWidgetItem(chapterTree_,
+                                         {chapter.title, QString::number(metrics.characterCount),
+                                          QString::number(metrics.hanCharacterCount),
+                                          QString::number(metrics.blockCount)});
         item->setData(0, kChapterIndexRole, chapter.index);
         item->setToolTip(0, tr("Chapter ID: %1").arg(chapter.id.toString()));
     }
 
-    documentSummary_->setText(tr("%1 — %2 chapters, %3 words")
+    const auto totals = DocumentMetrics::forDocument(book);
+    documentSummary_->setText(tr("%1 — %2 chapters · 总字数：%3 · 总汉字：%4")
                                   .arg(book.metadata.title)
                                   .arg(book.chapters.size())
-                                  .arg(DocumentMetrics::wordCount(book)));
+                                  .arg(totals.characterCount)
+                                  .arg(totals.hanCharacterCount));
     bookMetadata_->setText(
         tr("Book ID: %1\nAuthors: %2\nLanguage: %3")
             .arg(book.id.toString(), authorsText(book.metadata.authors), book.metadata.language));
@@ -571,19 +579,21 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
     }
     const auto& chapter = book->chapters.at(chapterIndex);
     const auto metrics = DocumentMetrics::forChapter(chapter);
-    chapterMetadata_->setText(tr("Chapter %1 of %2\nChapter ID: %3\nBlocks: %4\nWords: %5")
+    chapterMetadata_->setText(tr("Chapter %1 of %2\nChapter ID: %3\nBlocks: %4\n字数：%5\n汉字：%6")
                                   .arg(chapter.index + 1)
                                   .arg(book->chapters.size())
                                   .arg(chapter.id.toString())
                                   .arg(metrics.blockCount)
-                                  .arg(metrics.wordCount));
+                                  .arg(metrics.characterCount)
+                                  .arg(metrics.hanCharacterCount));
     chapterStatus_->setText(tr("● Stored chapter · %1 source spans").arg(metrics.sourceSpanCount));
     chapterStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#167345;"));
     reader_->setHtml(chapterHtml(chapter));
-    statusBar()->showMessage(tr("Chapter %1 of %2 — %3 words")
+    statusBar()->showMessage(tr("Chapter %1 of %2 — 字数：%3 · 汉字：%4")
                                  .arg(chapter.index + 1)
                                  .arg(book->chapters.size())
-                                 .arg(metrics.wordCount));
+                                 .arg(metrics.characterCount)
+                                 .arg(metrics.hanCharacterCount));
 }
 
 void MainWindow::clearBookView() {

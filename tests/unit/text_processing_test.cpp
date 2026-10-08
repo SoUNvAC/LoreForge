@@ -16,6 +16,7 @@ class TextProcessingTest final : public QObject {
     void detectsEnglishAndChineseChapterHeadings();
     void rejectsOrdinaryLinesAsHeadings();
     void countsLatinWordsAndCjkIdeographs();
+    void countsTotalCharactersAndHanSeparately();
 };
 
 void TextProcessingTest::normalizesBomLineEndingsAndUnicode() {
@@ -62,6 +63,26 @@ void TextProcessingTest::countsLatinWordsAndCjkIdeographs() {
     QCOMPARE(loreforge::text::WordCounter::count(u"你好，世界"), 4);
     QCOMPARE(loreforge::text::WordCounter::count(u"e\u0301lan vital"), 2);
     QCOMPARE(loreforge::text::WordCounter::count(QStringView{}), 0);
+}
+
+void TextProcessingTest::countsTotalCharactersAndHanSeparately() {
+    const auto mixed = loreforge::text::WordCounter::countCharacters(u"你好，world！2026");
+    QCOMPARE(mixed.total, 11);
+    QCOMPARE(mixed.han, 2);
+    const auto rare = loreforge::text::WordCounter::countCharacters(u"汉漢〇\U00020000\U00030000");
+    QCOMPARE(rare.total, 5);
+    QCOMPARE(rare.han, 5);
+    const auto otherLanguages = loreforge::text::WordCounter::countCharacters(u"かな한글");
+    QCOMPARE(otherLanguages.total, 4);
+    QCOMPARE(otherLanguages.han, 0);
+    const auto accented = loreforge::text::WordCounter::countCharacters(u"e\u0301 é");
+    QCOMPARE(accented.total, 2);
+    QCOMPARE(accented.han, 0);
+    const auto excluded =
+        loreforge::text::WordCounter::countCharacters(u"，。！？…—*** \t\r\n\U0001F600");
+    QCOMPARE(excluded.total, 0);
+    QCOMPARE(excluded.han, 0);
+    QCOMPARE(loreforge::text::WordCounter::countCharacters(QStringView{}).total, 0);
 }
 
 QTEST_APPLESS_MAIN(TextProcessingTest)

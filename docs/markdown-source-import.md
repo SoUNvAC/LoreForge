@@ -93,6 +93,15 @@ introduced by this importer.
 
 ## Verification
 
+The desktop displays **总字数** (total characters) and **总汉字** (Han characters)
+in the book summary, with both counts per chapter. Only paragraph blocks count;
+chapter/volume titles, headings and scene breaks do not. Total characters count
+Unicode letters and numbers individually; Han characters are that total's Unicode
+`Script=Han` subset. Punctuation, symbols, emoji, whitespace and combining marks
+do not count. Supplementary-plane Han characters count once, not as two UTF-16
+code units. For example, `你好，world！2026` has total 11 and Han 2. Existing
+word-based analysis/token-estimation APIs retain their separate word-count policy.
+
 Synthetic fixtures cover TOC ordering, Chinese text, UTF-8 byte spans, BOM/CRLF,
 front matter, repeated headings, stable IDs, content hashes, invalid inputs,
 read-only import and persisted desktop reopening. They contain no external novel

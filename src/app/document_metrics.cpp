@@ -9,7 +9,9 @@ ChapterMetrics DocumentMetrics::forChapter(const document::Chapter& chapter) {
     metrics.blockCount = chapter.blocks.size();
     for (const auto& block : chapter.blocks) {
         if (block.type == document::BlockType::Paragraph) {
-            metrics.wordCount += text::WordCounter::count(block.text);
+            const auto counts = text::WordCounter::countCharacters(block.text);
+            metrics.characterCount += counts.total;
+            metrics.hanCharacterCount += counts.han;
         }
         if (block.sourceSpan.isValid()) {
             ++metrics.sourceSpanCount;
@@ -18,12 +20,16 @@ ChapterMetrics DocumentMetrics::forChapter(const document::Chapter& chapter) {
     return metrics;
 }
 
-qsizetype DocumentMetrics::wordCount(const document::Document& document) {
-    qsizetype words = 0;
+ChapterMetrics DocumentMetrics::forDocument(const document::Document& document) {
+    ChapterMetrics totals;
     for (const auto& chapter : document.chapters) {
-        words += forChapter(chapter).wordCount;
+        const auto metrics = forChapter(chapter);
+        totals.characterCount += metrics.characterCount;
+        totals.hanCharacterCount += metrics.hanCharacterCount;
+        totals.blockCount += metrics.blockCount;
+        totals.sourceSpanCount += metrics.sourceSpanCount;
     }
-    return words;
+    return totals;
 }
 
 } // namespace loreforge::app
