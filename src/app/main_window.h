@@ -20,12 +20,15 @@ namespace loreforge::app {
 class ContextInspectorWidget;
 class RepairQueueWidget;
 class LlmWorkbench;
+class NovelAnalysisWorkbench;
+class ChapterAnalysisController;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 
   public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     [[nodiscard]] bool openProjectFile(QStringView filePath);
     [[nodiscard]] bool importMarkdownSource(QStringView sourcePath, QStringView projectPath);
@@ -42,6 +45,7 @@ class MainWindow final : public QMainWindow {
     void editRepairSuggestion(QString candidateId, QString suggestion);
     void protectRepairTerm(QString candidateId, QString canonicalSpelling);
     void prepareChapterPreview(int maximumTokens, int reservedTokens);
+    void startChapterAnalysis();
 
   private:
     void setWorkspace(StoredWorkspace workspace);
@@ -49,6 +53,7 @@ class MainWindow final : public QMainWindow {
     void showBook(qsizetype projectIndex, qsizetype bookIndex);
     void showLoadError(QString message);
     void reloadRepairQueue();
+    void reloadAnalysisHistory();
     [[nodiscard]] const document::Document* selectedBook() const;
 
     QTreeWidget* projectExplorer_ = nullptr;
@@ -63,6 +68,8 @@ class MainWindow final : public QMainWindow {
     ContextInspectorWidget* contextInspector_ = nullptr;
     RepairQueueWidget* repairQueue_ = nullptr;
     LlmWorkbench* llmWorkbench_ = nullptr;
+    NovelAnalysisWorkbench* analysisWorkbench_ = nullptr;
+    ChapterAnalysisController* analysisController_ = nullptr;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;

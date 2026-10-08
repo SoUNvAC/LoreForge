@@ -207,6 +207,11 @@ set_tests_properties(LoreForgeMainWindowTests PROPERTIES ENVIRONMENT "QT_QPA_PLA
 
 qt_add_executable(LoreForgeLlmWorkbenchTests llm_workbench_test.cpp)
 qt_add_executable(LoreForgeChapterPreviewTests chapter_preview_test.cpp)
+qt_add_executable(LoreForgeChapterAnalysisPipelineTests chapter_analysis_pipeline_test.cpp)
+target_include_directories(LoreForgeChapterAnalysisPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(LoreForgeChapterAnalysisPipelineTests PRIVATE LoreForge::DesktopUi Qt6::Test Qt6::Network)
+add_test(NAME LoreForgeChapterAnalysisPipelineTests COMMAND LoreForgeChapterAnalysisPipelineTests)
+set_tests_properties(LoreForgeChapterAnalysisPipelineTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 target_include_directories(LoreForgeChapterPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(LoreForgeChapterPreviewTests PRIVATE LoreForge::DesktopUi Qt6::Test)
 add_test(NAME LoreForgeChapterPreviewTests COMMAND LoreForgeChapterPreviewTests)

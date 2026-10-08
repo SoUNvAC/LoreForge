@@ -38,6 +38,8 @@ class QwenClient final : public QObject, public ILLMClient {
     [[nodiscard]] QUuid enqueue(LLMRequest request, CompletionHandler completion) override;
     [[nodiscard]] bool cancel(const QUuid& requestId) override;
     [[nodiscard]] qsizetype pendingRequestCount() const noexcept override;
+    // Exact JSON body, without authentication headers; shared by transport and audit storage.
+    [[nodiscard]] QByteArray requestBody(const LLMRequest& request) const;
 
   private:
     struct PendingRequest final {

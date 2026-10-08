@@ -120,9 +120,10 @@ void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
     loreforge::app::MainWindow window;
     auto* tabs = child<QTabWidget>(window, "workspacePages");
     QVERIFY(tabs);
-    QCOMPARE(tabs->count(), 2);
+    QCOMPARE(tabs->count(), 3);
     QCOMPARE(tabs->tabText(0), QStringLiteral("阅读工作台"));
     QCOMPARE(tabs->tabText(1), QStringLiteral("LLM 工作台"));
+    QCOMPARE(tabs->tabText(2), QStringLiteral("小说分析"));
     auto* reader = child<QWidget>(window, "chapterReader");
     auto* context = child<QDockWidget>(window, "contextInspectorDock");
     auto* repairs = child<QDockWidget>(window, "repairQueueDock");
@@ -131,10 +132,17 @@ void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
     tabs->setCurrentIndex(1);
     QVERIFY(context->isHidden());
     QVERIFY(repairs->isHidden());
+    tabs->setCurrentIndex(2);
+    QVERIFY(context->isHidden());
+    QVERIFY(repairs->isHidden());
     QVERIFY(!child<QPushButton>(window, "llmAnalyzeChapter")->isEnabled());
     auto* roles = child<QTableWidget>(window, "llmRoleStatus");
     QCOMPARE(roles->rowCount(), 3);
     QCOMPARE(roles->item(2, 0)->text(), QStringLiteral("审查员（LLM 角色）"));
+    QVERIFY(!child<QWidget>(window, "llmWorkbench")
+                 ->findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview")));
+    QVERIFY(child<QWidget>(window, "novelAnalysisWorkbench")
+                ->findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview")));
     tabs->setCurrentIndex(0);
     QCOMPARE(child<QWidget>(window, "chapterReader"), reader);
     QVERIFY(context->isHidden());

@@ -7,6 +7,7 @@
 #include "loreforge/storage/book_repository.h"
 #include "loreforge/storage/project_database.h"
 #include "loreforge/storage/repair_queue_repository.h"
+#include "novel_analysis_workbench.h"
 #include "repair_queue_widget.h"
 
 #include <QAction>
@@ -208,9 +209,49 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     llmScroll->setFrameShape(QFrame::NoFrame);
     llmWorkbench_ = new LlmWorkbench(llmScroll);
     llmScroll->setWidget(llmWorkbench_);
-    connect(llmWorkbench_, &LlmWorkbench::chapterPreviewRequested, this,
-            &MainWindow::prepareChapterPreview);
     pages->addTab(llmScroll, tr("LLM 工作台"));
+    auto* analysisScroll = new QScrollArea(pages);
+    analysisScroll->setWidgetResizable(true);
+    analysisScroll->setFrameShape(QFrame::NoFrame);
+    analysisWorkbench_ = new NovelAnalysisWorkbench(analysisScroll);
+    analysisScroll->setWidget(analysisWorkbench_);
+    pages->addTab(analysisScroll, tr("小说分析"));
+    analysisController_ = new ChapterAnalysisController(this);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::chapterPreviewRequested, this,
+            &MainWindow::prepareChapterPreview);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::chapterSelected, this, [this](int index) {
+        if (index >= 0 && index < chapterTree_->topLevelItemCount()) {
+            chapterTree_->setCurrentItem(chapterTree_->topLevelItem(index));
+        }
+    });
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::analysisRequested, this,
+            &MainWindow::startChapterAnalysis);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::cancellationRequested, analysisController_,
+            &ChapterAnalysisController::cancel);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::metricsChanged, llmWorkbench_,
+            &LlmWorkbench::showAnalysisMetrics);
+    connect(llmWorkbench_, &LlmWorkbench::configurationChanged, analysisWorkbench_,
+            &NovelAnalysisWorkbench::invalidatePreview);
+    connect(analysisController_, &ChapterAnalysisController::busyChanged, llmWorkbench_,
+            &LlmWorkbench::setAnalysisBusy);
+    connect(analysisController_, &ChapterAnalysisController::busyChanged, analysisWorkbench_,
+            &NovelAnalysisWorkbench::setBusy);
+    connect(analysisController_, &ChapterAnalysisController::roleChanged, analysisWorkbench_,
+            &NovelAnalysisWorkbench::updateRole);
+    connect(analysisController_, &ChapterAnalysisController::roleChanged, llmWorkbench_,
+            [this](int role, const QString& status, const QString& usage, qint64 latency) {
+                llmWorkbench_->showAnalysisMetrics(
+                    tr("当前小说任务：角色 %1 · %2\n%3 · 响应耗时 %4 ms\n"
+                       "生成速度未提供（非流式）；任务结束后刷新项目/本章累计。")
+                        .arg(role + 1)
+                        .arg(status, usage)
+                        .arg(latency));
+            });
+    connect(analysisController_, &ChapterAnalysisController::finished, this,
+            [this](QString status) {
+                reloadAnalysisHistory();
+                analysisWorkbench_->showError(std::move(status));
+            });
     centralLayout->addWidget(pages, 1);
     setCentralWidget(central);
 
@@ -229,21 +270,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     repairDock->setMinimumWidth(440);
     addDockWidget(Qt::BottomDockWidgetArea, repairDock);
     viewMenu->addAction(repairDock->toggleViewAction());
-    connect(
-        pages, &QTabWidget::currentChanged, this,
-        [contextDock, repairDock, contextVisible = true, repairVisible = true](int index) mutable {
-            if (index == 1) {
-                contextVisible = !contextDock->isHidden();
-                repairVisible = !repairDock->isHidden();
-                contextDock->hide();
-                repairDock->hide();
-            } else {
-                contextDock->setVisible(contextVisible);
-                repairDock->setVisible(repairVisible);
-            }
-            contextDock->toggleViewAction()->setEnabled(index == 0);
-            repairDock->toggleViewAction()->setEnabled(index == 0);
-        });
+    connect(pages, &QTabWidget::currentChanged, this,
+            [contextDock, repairDock, contextVisible = true, repairVisible = true,
+             wasReading = true](int index) mutable {
+                if (index != 0) {
+                    if (wasReading) {
+                        contextVisible = !contextDock->isHidden();
+                        repairVisible = !repairDock->isHidden();
+                    }
+                    contextDock->hide();
+                    repairDock->hide();
+                } else {
+                    contextDock->setVisible(contextVisible);
+                    repairDock->setVisible(repairVisible);
+                }
+                wasReading = index == 0;
+                contextDock->toggleViewAction()->setEnabled(index == 0);
+                repairDock->toggleViewAction()->setEnabled(index == 0);
+            });
     connect(repairQueue_, &RepairQueueWidget::candidateApproved, this,
             &MainWindow::approveRepairCandidate);
     connect(repairQueue_, &RepairQueueWidget::candidateRejected, this,
@@ -257,6 +301,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::selectProjectItem);
     connect(chapterTree_, &QTreeWidget::currentItemChanged, this, &MainWindow::displayChapter);
     statusBar()->showMessage(tr("Ready"));
+}
+
+MainWindow::~MainWindow() {
+    analysisController_->cancel();
 }
 
 void MainWindow::inspectContext(const context::ContextInspectorData& context) {
@@ -622,10 +670,11 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
 }
 
 void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
+    analysisController_->cancel();
     static_cast<void>(previous);
     const auto* book = selectedBook();
     if (current == nullptr || book == nullptr) {
-        llmWorkbench_->setSelectedChapter(tr("请在阅读工作台选择 Markdown 章节。"), false);
+        analysisWorkbench_->setSelectedBook(nullptr, -1);
         chapterMetadata_->clear();
         chapterStatus_->setText(tr("○ No chapter selected"));
         reader_->clear();
@@ -633,16 +682,15 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
     }
     const auto chapterIndex = current->data(0, kChapterIndexRole).toLongLong();
     if (chapterIndex < 0 || chapterIndex >= book->chapters.size()) {
-        llmWorkbench_->setSelectedChapter(tr("未选择有效章节。"), false);
+        analysisWorkbench_->setSelectedBook(nullptr, -1);
         chapterMetadata_->clear();
         chapterStatus_->setText(tr("○ No chapter selected"));
         reader_->clear();
         return;
     }
     const auto& chapter = book->chapters.at(chapterIndex);
-    llmWorkbench_->setSelectedChapter(
-        tr("%1 / %2\n章节 ID：%3").arg(book->metadata.title, chapter.title, chapter.id.toString()),
-        book->metadata.sourceFormat == QStringLiteral("markdown-source"));
+    analysisWorkbench_->setSelectedBook(book, chapterIndex);
+    reloadAnalysisHistory();
     const auto metrics = DocumentMetrics::forChapter(chapter);
     chapterMetadata_->setText(tr("Chapter %1 of %2\nChapter ID: %3\nBlocks: %4\n字数：%5\n汉字：%6")
                                   .arg(chapter.index + 1)
@@ -662,7 +710,9 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
 }
 
 void MainWindow::clearBookView() {
-    llmWorkbench_->setSelectedChapter(tr("请在阅读工作台选择 Markdown 章节。"), false);
+    analysisController_->cancel();
+    analysisWorkbench_->setSelectedBook(nullptr, -1);
+    llmWorkbench_->showAnalysisMetrics(tr("小说任务统计：尚未选择项目。"));
     selectedProjectIndex_ = -1;
     selectedBookIndex_ = -1;
     chapterTree_->clear();
@@ -679,29 +729,79 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || openedDatabasePath_.isEmpty()) {
-        llmWorkbench_->showChapterPreviewError(tr("请先打开项目并选择章节。"));
+        analysisWorkbench_->showError(tr("准备失败；未发送。请先打开项目并选择章节。"));
         return;
     }
     auto built = ChapterPreviewBuilder::build(
         workspace_->projects.at(selectedProjectIndex_).metadata.id, *book,
         item->data(0, kChapterIndexRole).toLongLong(), maximumTokens, reservedTokens);
     if (const auto* error = std::get_if<storage::StorageError>(&built)) {
-        llmWorkbench_->showChapterPreviewError(error->message);
+        analysisWorkbench_->invalidatePreview();
+        analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
         return;
     }
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
-        llmWorkbench_->showChapterPreviewError(error->message);
+        analysisWorkbench_->invalidatePreview();
+        analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
         return;
     }
     auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
     const auto stored =
         ChapterPreviewBuilder::store(*database, std::get<ChapterPreview>(std::move(built)));
     if (const auto* error = std::get_if<storage::StorageError>(&stored)) {
-        llmWorkbench_->showChapterPreviewError(error->message);
+        analysisWorkbench_->invalidatePreview();
+        analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
         return;
     }
-    llmWorkbench_->showChapterPreview(std::get<ChapterPreview>(stored));
+    analysisWorkbench_->showChapterPreview(std::get<ChapterPreview>(stored));
+}
+
+void MainWindow::startChapterAnalysis() {
+    const auto* book = selectedBook();
+    const auto* item = chapterTree_->currentItem();
+    if (!book || !item || !analysisWorkbench_->preview() || analysisController_->busy()) {
+        return;
+    }
+    const auto preview = *analysisWorkbench_->preview();
+    const auto connection = llmWorkbench_->analysisConnection();
+    if (const auto* error = std::get_if<QString>(&connection)) {
+        analysisWorkbench_->showError(*error);
+        return;
+    }
+    const auto checked = ChapterPreviewBuilder::build(
+        preview.snapshot.projectId, *book, item->data(0, kChapterIndexRole).toLongLong(),
+        preview.snapshot.content.value(QStringLiteral("maximum_tokens")).toInt(),
+        preview.snapshot.content.value(QStringLiteral("reserved_output_tokens")).toInt());
+    if (!std::holds_alternative<ChapterPreview>(checked) ||
+        std::get<ChapterPreview>(checked).snapshot.id != preview.snapshot.id) {
+        analysisWorkbench_->invalidatePreview();
+        analysisWorkbench_->showError(tr("原文或章节已变化；未发送，请重新准备。"));
+        return;
+    }
+    analysisController_->start(openedDatabasePath_, *book,
+                               item->data(0, kChapterIndexRole).toLongLong(), preview,
+                               std::get<AnalysisConnection>(connection));
+}
+
+void MainWindow::reloadAnalysisHistory() {
+    const auto* book = selectedBook();
+    const auto* item = chapterTree_->currentItem();
+    if (!book || !item || openedDatabasePath_.isEmpty()) {
+        return;
+    }
+    const auto index = item->data(0, kChapterIndexRole).toLongLong();
+    if (index < 0 || index >= book->chapters.size()) {
+        return;
+    }
+    const auto history = ChapterAnalysisController::history(
+        openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id);
+    if (const auto* error = std::get_if<storage::StorageError>(&history)) {
+        analysisWorkbench_->showError(tr("历史读取失败：%1").arg(error->message));
+        return;
+    }
+    analysisWorkbench_->showHistory(std::get<QList<AnalysisHistoryEntry>>(history),
+                                    book->chapters[index].id.toString());
 }
 
 void MainWindow::showLoadError(QString message) {

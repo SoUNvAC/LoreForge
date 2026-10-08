@@ -1,6 +1,6 @@
 #pragma once
 
-#include "chapter_preview.h"
+#include "analysis_connection.h"
 #include "loreforge/llm/qwen_client.h"
 
 #include <QWidget>
@@ -23,12 +23,12 @@ class LlmWorkbench final : public QWidget {
   public:
     explicit LlmWorkbench(QWidget* parent = nullptr, QString settingsFile = {});
     ~LlmWorkbench() override;
-    void setSelectedChapter(QString description, bool available);
-    void showChapterPreview(const ChapterPreview& preview);
-    void showChapterPreviewError(QString message);
+    [[nodiscard]] std::variant<AnalysisConnection, QString> analysisConnection() const;
+    void setAnalysisBusy(bool busy);
+    void showAnalysisMetrics(QString message);
 
   signals:
-    void chapterPreviewRequested(int maximumTokens, int reservedTokens);
+    void configurationChanged();
 
   private:
     void saveConfiguration();
@@ -55,14 +55,8 @@ class LlmWorkbench final : public QWidget {
     QPushButton* test_ = nullptr;
     QPushButton* cancel_ = nullptr;
     QPushButton* resetTokens_ = nullptr;
-    QPushButton* prepareChapter_ = nullptr;
-    QSpinBox* contextLimit_ = nullptr;
-    QSpinBox* chapterOutputBudget_ = nullptr;
-    QLabel* selectedChapter_ = nullptr;
-    QLabel* previewStatus_ = nullptr;
-    QPlainTextEdit* chapterPreview_ = nullptr;
-    QPlainTextEdit* sourcePreview_ = nullptr;
-    bool chapterAvailable_ = false;
+    QLabel* analysisMetrics_ = nullptr;
+    bool analysisBusy_ = false;
     QLabel* connection_ = nullptr;
     QLabel* metrics_ = nullptr;
     QLabel* totals_ = nullptr;

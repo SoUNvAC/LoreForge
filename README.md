@@ -11,10 +11,13 @@ maintained with the project planning materials.
 LLM desktop integration has begun with a separate workbench tab for the user's LAN-hosted
 single-model API: configuration, synthetic connection/JSON probes, cancellation and honest
 response metrics. Markdown chapters now support source-checked, versioned snapshots stored
-in the project and complete message previews with heuristic budget checks, without sending
-novel text. Chapter analysis and the three-role workflow are not yet enabled.
+in the project and complete message previews with heuristic budget checks. A separate
+Novel Analysis tab now runs explicitly confirmed single-chapter analyzer/checker/reviewer
+requests serially against the same model, with evidence validation, persistent history and
+project/chapter token totals. No automatic novel sending, rewriting or batch runs.
 See [LLM workbench](docs/llm-workbench.md) and the original
 [integration proposal](docs/llm-cloud-integration-plan.md).
+See [Novel analysis](docs/novel-analysis.md) for the workflow and validation limits.
 
 Maintained Markdown source trees are the primary desktop import workflow. Use
 **File > Import Markdown Source** with a directory containing `SUMMARY.md`, then

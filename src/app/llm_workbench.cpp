@@ -43,7 +43,7 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
             : std::make_unique<QSettings>(settingsFile, QSettings::IniFormat);
     auto* layout = new QVBoxLayout(this);
     auto* note = new QLabel(tr("一个模型，三个角色：分析员 → 复核员 → 审查员，默认串行。\n"
-                               "本阶段支持连接测试与章节发送预览；不会发送小说。"),
+                               "本页管理连接和运行统计；小说业务请进入“小说分析”页。"),
                             this);
     note->setWordWrap(true);
     layout->addWidget(note);
@@ -110,10 +110,6 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     buttons->addWidget(test_);
     buttons->addWidget(cancel_);
     buttons->addStretch();
-    auto* analyze = new QPushButton(tr("分析当前章（后续阶段）"), this);
-    analyze->setObjectName(QStringLiteral("llmAnalyzeChapter"));
-    analyze->setEnabled(false);
-    buttons->addWidget(analyze);
     layout->addLayout(buttons);
     connection_ = new QLabel(tr("未测试；不会自动连接"), this);
     connection_->setObjectName(QStringLiteral("llmConnectionStatus"));
@@ -125,8 +121,7 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     metrics_->setObjectName(QStringLiteral("llmTestMetrics"));
     metrics_->setWordWrap(true);
     layout->addWidget(metrics_);
-    totals_ = new QLabel(
-        tr("连接测试累计：尚无响应。项目/每章节 token：尚无章节任务，不包含连接测试。"), this);
+    totals_ = new QLabel(tr("连接测试累计：尚无响应；小说任务统计独立显示。"), this);
     totals_->setObjectName(QStringLiteral("llmTestTotals"));
     totals_->setWordWrap(true);
     layout->addWidget(totals_);
@@ -134,64 +129,11 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     resetTokens_->setObjectName(QStringLiteral("llmResetTokenCounts"));
     resetTokens_->setToolTip(tr("仅重置本会话连接测试累计，不修改项目、连接配置或上次响应。"));
     layout->addWidget(resetTokens_, 0, Qt::AlignLeft);
-    auto* chapterGroup = new QGroupBox(tr("当前章：快照与发送预览（不发送）"), this);
-    auto* chapterLayout = new QVBoxLayout(chapterGroup);
-    selectedChapter_ = new QLabel(tr("请在阅读工作台选择 Markdown 章节。"), chapterGroup);
-    selectedChapter_->setObjectName(QStringLiteral("llmSelectedChapter"));
-    selectedChapter_->setWordWrap(true);
-    selectedChapter_->setTextFormat(Qt::PlainText);
-    chapterLayout->addWidget(selectedChapter_);
-    auto* budgets = new QFormLayout;
-    contextLimit_ = new QSpinBox(chapterGroup);
-    contextLimit_->setObjectName(QStringLiteral("llmChapterContextLimit"));
-    contextLimit_->setRange(1024, 1048576);
-    contextLimit_->setValue(32768);
-    chapterOutputBudget_ = new QSpinBox(chapterGroup);
-    chapterOutputBudget_->setObjectName(QStringLiteral("llmChapterOutputBudget"));
-    chapterOutputBudget_->setRange(256, 65536);
-    chapterOutputBudget_->setValue(4096);
-    budgets->addRow(tr("上下文总上限 token（请按服务实际配置填写）"), contextLimit_);
-    budgets->addRow(tr("预留输出 token"), chapterOutputBudget_);
-    chapterLayout->addLayout(budgets);
-    prepareChapter_ = new QPushButton(tr("准备当前章快照与预览"), chapterGroup);
-    prepareChapter_->setObjectName(QStringLiteral("llmPrepareChapterPreview"));
-    prepareChapter_->setEnabled(false);
-    chapterLayout->addWidget(prepareChapter_);
-    previewStatus_ = new QLabel(tr("尚未准备；正文不会自动发送。"), chapterGroup);
-    previewStatus_->setObjectName(QStringLiteral("llmChapterPreviewStatus"));
-    previewStatus_->setWordWrap(true);
-    previewStatus_->setTextFormat(Qt::PlainText);
-    chapterLayout->addWidget(previewStatus_);
-    auto* previewTabs = new QTabWidget(chapterGroup);
-    sourcePreview_ = new QPlainTextEdit(previewTabs);
-    sourcePreview_->setObjectName(QStringLiteral("llmChapterSourcePreview"));
-    sourcePreview_->setReadOnly(true);
-    sourcePreview_->setMinimumHeight(220);
-    sourcePreview_->setPlaceholderText(tr("将进入消息的原始 Markdown；不会修改源文件。"));
-    previewTabs->addTab(sourcePreview_, tr("原文预览"));
-    chapterPreview_ = new QPlainTextEdit(previewTabs);
-    chapterPreview_->setObjectName(QStringLiteral("llmChapterMessagesPreview"));
-    chapterPreview_->setReadOnly(true);
-    chapterPreview_->setMinimumHeight(220);
-    chapterPreview_->setPlaceholderText(
-        tr("完整 system/user 消息预览；只包含当前章，不包含密钥。"));
-    previewTabs->addTab(chapterPreview_, tr("完整消息 JSON"));
-    chapterLayout->addWidget(previewTabs);
-    layout->addWidget(chapterGroup);
-    auto* roles = new QTableWidget(3, 4, this);
-    roles->setObjectName(QStringLiteral("llmRoleStatus"));
-    roles->setHorizontalHeaderLabels({tr("角色"), tr("状态"), tr("Token"), tr("耗时")});
-    roles->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    roles->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    roles->verticalHeader()->hide();
-    const QStringList names{tr("分析员"), tr("复核员（同模型交叉检查）"), tr("审查员（LLM 角色）")};
-    for (int row = 0; row < 3; ++row) {
-        roles->setItem(row, 0, new QTableWidgetItem(names.at(row)));
-        roles->setItem(row, 1, new QTableWidgetItem(tr("尚未接通")));
-        roles->setItem(row, 2, new QTableWidgetItem(QStringLiteral("—")));
-        roles->setItem(row, 3, new QTableWidgetItem(QStringLiteral("—")));
-    }
-    layout->addWidget(roles);
+    analysisMetrics_ = new QLabel(tr("小说任务统计：尚未选择项目。"), this);
+    analysisMetrics_->setObjectName(QStringLiteral("llmAnalysisMetrics"));
+    analysisMetrics_->setWordWrap(true);
+    analysisMetrics_->setTextFormat(Qt::PlainText);
+    layout->addWidget(analysisMetrics_);
     log_ = new QPlainTextEdit(this);
     log_->setObjectName(QStringLiteral("llmConnectionLog"));
     log_->setReadOnly(true);
@@ -215,19 +157,10 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     connect(test_, &QPushButton::clicked, this, &LlmWorkbench::testConnection);
     connect(cancel_, &QPushButton::clicked, this, &LlmWorkbench::cancelTest);
     connect(resetTokens_, &QPushButton::clicked, this, &LlmWorkbench::resetTokenCounts);
-    connect(prepareChapter_, &QPushButton::clicked, this, [this] {
-        if (chapterAvailable_ && requestId_.isNull()) {
-            emit chapterPreviewRequested(contextLimit_->value(), chapterOutputBudget_->value());
-        }
-    });
-    const auto invalidatePreview = [this] {
-        chapterPreview_->clear();
-        sourcePreview_->clear();
-        previewStatus_->setText(tr("预算已修改，请重新准备；旧快照保留在项目中，未发送。"));
+    const auto changed = [this] {
+        connection_->setText(tr("配置已修改，请重新测试"));
+        emit configurationChanged();
     };
-    connect(contextLimit_, &QSpinBox::valueChanged, this, invalidatePreview);
-    connect(chapterOutputBudget_, &QSpinBox::valueChanged, this, invalidatePreview);
-    const auto changed = [this] { connection_->setText(tr("配置已修改，请重新测试")); };
     connect(endpoint_, &QLineEdit::textChanged, this, changed);
     connect(modelId_, &QLineEdit::textChanged, this, changed);
     connect(apiKey_, &QLineEdit::textChanged, this, changed);
@@ -244,35 +177,33 @@ LlmWorkbench::~LlmWorkbench() {
     client_.reset();
 }
 
-void LlmWorkbench::setSelectedChapter(QString description, bool available) {
-    chapterAvailable_ = available;
-    selectedChapter_->setText(std::move(description));
-    prepareChapter_->setEnabled(available && requestId_.isNull());
-    chapterPreview_->clear();
-    sourcePreview_->clear();
-    previewStatus_->setText(tr("章节选择已更新；请重新准备快照。正文不会自动发送。"));
+std::variant<AnalysisConnection, QString> LlmWorkbench::analysisConnection() const {
+    if (!requestId_.isNull() || analysisBusy_) {
+        return tr("已有连接测试或分析任务，请等待完成。");
+    }
+    if (const auto error = configurationError(); !error.isEmpty()) {
+        return error;
+    }
+    if (format_->currentText() == QStringLiteral("text")) {
+        return tr("请在 LLM 页选择已验证的 json_object 或 json_schema。");
+    }
+    const QUrl endpoint(endpoint_->text().trimmed(), QUrl::StrictMode);
+    return AnalysisConnection{{endpoint, apiKey_->text().trimmed().toUtf8(),
+                               modelId_->text().trimmed(), privateHost(endpoint),
+                               tokenField_->currentText() == QStringLiteral("max_tokens")
+                                   ? llm::CompletionTokenParameter::MaxTokens
+                                   : llm::CompletionTokenParameter::MaxCompletionTokens},
+                              format_->currentText(),
+                              timeout_->value() * 1000};
 }
 
-void LlmWorkbench::showChapterPreview(const ChapterPreview& preview) {
-    chapterPreview_->setPlainText(preview.messagesJson);
-    sourcePreview_->setPlainText(preview.snapshot.content.value(QStringLiteral("source"))
-                                     .toObject()
-                                     .value(QStringLiteral("utf8"))
-                                     .toString());
-    previewStatus_->setText(
-        tr("已保存到 .loreforge 项目；尚未发送。\n快照 ID：%1\nSHA-256：%2\n"
-           "提示词 v%3 · 输出契约 v%4 · 估算输入 %5 token（非模型精确计数）\n"
-           "仅当前章原文与相对源路径；不含其他章节、跨章记忆或密钥。")
-            .arg(preview.snapshot.id.toString(), preview.snapshot.contentHash.toHex())
-            .arg(preview.prompt.version)
-            .arg(preview.schema.version)
-            .arg(preview.estimatedTokens));
+void LlmWorkbench::setAnalysisBusy(bool busy) {
+    analysisBusy_ = busy;
+    setBusy(!requestId_.isNull());
 }
 
-void LlmWorkbench::showChapterPreviewError(QString message) {
-    chapterPreview_->clear();
-    sourcePreview_->clear();
-    previewStatus_->setText(tr("准备失败；未发送。%1").arg(std::move(message)));
+void LlmWorkbench::showAnalysisMetrics(QString message) {
+    analysisMetrics_->setText(std::move(message));
 }
 
 QString LlmWorkbench::configurationError() const {
@@ -324,16 +255,13 @@ void LlmWorkbench::setBusy(bool busy) {
     for (auto* widget :
          QList<QWidget*>{endpoint_, modelSize_, modelId_, apiKey_, allowHttp_, format_, tokenField_,
                          timeout_, outputBudget_, save_, test_, resetTokens_}) {
-        widget->setEnabled(!busy);
+        widget->setEnabled(!busy && !analysisBusy_);
     }
     cancel_->setEnabled(busy);
-    contextLimit_->setEnabled(!busy);
-    chapterOutputBudget_->setEnabled(!busy);
-    prepareChapter_->setEnabled(!busy && chapterAvailable_);
 }
 
 void LlmWorkbench::testConnection() {
-    if (!requestId_.isNull()) {
+    if (!requestId_.isNull() || analysisBusy_) {
         return;
     }
     if (const auto error = configurationError(); !error.isEmpty()) {
@@ -474,7 +402,7 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
 void LlmWorkbench::updateTokenTotals() {
     totals_->setText(
         tr("本会话连接测试累计已知：输入 %1 · 输出 %2 · 总计 %3 token；%4 次用量未知。\n"
-           "项目/每章节 token：尚无章节任务，不包含连接测试。")
+           "此计数仅含连接测试；小说任务统计独立显示。")
             .arg(inputTokens_)
             .arg(outputTokens_)
             .arg(inputTokens_ + outputTokens_)

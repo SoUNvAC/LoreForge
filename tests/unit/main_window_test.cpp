@@ -161,7 +161,7 @@ void MainWindowTest::preparesChapterPreviewAndInvalidatesOnSelection() {
         if (!families.isEmpty()) {
             window.setFont(QFont(families.first(), 10));
         }
-        window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->setCurrentIndex(1);
+        window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->setCurrentIndex(2);
         window.resize(1400, 1150);
         window.show();
         QTest::qWait(30);

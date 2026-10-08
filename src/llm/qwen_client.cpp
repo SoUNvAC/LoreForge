@@ -141,6 +141,15 @@ QUuid QwenClient::enqueue(LLMRequest request, CompletionHandler completion) {
     return requestId;
 }
 
+QByteArray QwenClient::requestBody(const LLMRequest& request) const {
+    const auto model = request.model.trimmed().isEmpty() ? options_.defaultModel.trimmed()
+                                                         : request.model.trimmed();
+    return requestPayload(request, model,
+                          options_.completionTokenParameter == CompletionTokenParameter::MaxTokens
+                              ? QStringLiteral("max_tokens")
+                              : QStringLiteral("max_completion_tokens"));
+}
+
 bool QwenClient::cancel(const QUuid& requestId) {
     for (auto iterator = queue_.begin(); iterator != queue_.end(); ++iterator) {
         if (iterator->id != requestId) {
@@ -207,9 +216,6 @@ void QwenClient::sendAttempt() {
     }
     ++active_->attemptCount;
     attemptTimedOut_ = false;
-    const auto model = active_->request.model.trimmed().isEmpty()
-                           ? options_.defaultModel.trimmed()
-                           : active_->request.model.trimmed();
     QNetworkRequest networkRequest(options_.endpoint);
     networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                                 QNetworkRequest::ManualRedirectPolicy);
@@ -222,11 +228,7 @@ void QwenClient::sendAttempt() {
     networkRequest.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
     networkRequest.setRawHeader(QByteArrayLiteral("User-Agent"),
                                 QByteArrayLiteral("LoreForge/0.1"));
-    activePayload_ =
-        requestPayload(active_->request, model,
-                       options_.completionTokenParameter == CompletionTokenParameter::MaxTokens
-                           ? QStringLiteral("max_tokens")
-                           : QStringLiteral("max_completion_tokens"));
+    activePayload_ = requestBody(active_->request);
     reply_ = network_.post(networkRequest, activePayload_);
     connect(reply_, &QNetworkReply::finished, this, &QwenClient::handleReplyFinished);
     timeoutTimer_.start(active_->request.timeoutMs);
