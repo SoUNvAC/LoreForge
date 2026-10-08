@@ -1,5 +1,6 @@
 #pragma once
 
+#include "chapter_preview.h"
 #include "loreforge/llm/qwen_client.h"
 
 #include <QWidget>
@@ -22,6 +23,12 @@ class LlmWorkbench final : public QWidget {
   public:
     explicit LlmWorkbench(QWidget* parent = nullptr, QString settingsFile = {});
     ~LlmWorkbench() override;
+    void setSelectedChapter(QString description, bool available);
+    void showChapterPreview(const ChapterPreview& preview);
+    void showChapterPreviewError(QString message);
+
+  signals:
+    void chapterPreviewRequested(int maximumTokens, int reservedTokens);
 
   private:
     void saveConfiguration();
@@ -48,6 +55,14 @@ class LlmWorkbench final : public QWidget {
     QPushButton* test_ = nullptr;
     QPushButton* cancel_ = nullptr;
     QPushButton* resetTokens_ = nullptr;
+    QPushButton* prepareChapter_ = nullptr;
+    QSpinBox* contextLimit_ = nullptr;
+    QSpinBox* chapterOutputBudget_ = nullptr;
+    QLabel* selectedChapter_ = nullptr;
+    QLabel* previewStatus_ = nullptr;
+    QPlainTextEdit* chapterPreview_ = nullptr;
+    QPlainTextEdit* sourcePreview_ = nullptr;
+    bool chapterAvailable_ = false;
     QLabel* connection_ = nullptr;
     QLabel* metrics_ = nullptr;
     QLabel* totals_ = nullptr;

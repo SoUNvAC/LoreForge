@@ -206,7 +206,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* llmScroll = new QScrollArea(pages);
     llmScroll->setWidgetResizable(true);
     llmScroll->setFrameShape(QFrame::NoFrame);
-    llmScroll->setWidget(new LlmWorkbench(llmScroll));
+    llmWorkbench_ = new LlmWorkbench(llmScroll);
+    llmScroll->setWidget(llmWorkbench_);
+    connect(llmWorkbench_, &LlmWorkbench::chapterPreviewRequested, this,
+            &MainWindow::prepareChapterPreview);
     pages->addTab(llmScroll, tr("LLM 工作台"));
     centralLayout->addWidget(pages, 1);
     setCentralWidget(central);
@@ -622,6 +625,7 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
     static_cast<void>(previous);
     const auto* book = selectedBook();
     if (current == nullptr || book == nullptr) {
+        llmWorkbench_->setSelectedChapter(tr("请在阅读工作台选择 Markdown 章节。"), false);
         chapterMetadata_->clear();
         chapterStatus_->setText(tr("○ No chapter selected"));
         reader_->clear();
@@ -629,12 +633,16 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
     }
     const auto chapterIndex = current->data(0, kChapterIndexRole).toLongLong();
     if (chapterIndex < 0 || chapterIndex >= book->chapters.size()) {
+        llmWorkbench_->setSelectedChapter(tr("未选择有效章节。"), false);
         chapterMetadata_->clear();
         chapterStatus_->setText(tr("○ No chapter selected"));
         reader_->clear();
         return;
     }
     const auto& chapter = book->chapters.at(chapterIndex);
+    llmWorkbench_->setSelectedChapter(
+        tr("%1 / %2\n章节 ID：%3").arg(book->metadata.title, chapter.title, chapter.id.toString()),
+        book->metadata.sourceFormat == QStringLiteral("markdown-source"));
     const auto metrics = DocumentMetrics::forChapter(chapter);
     chapterMetadata_->setText(tr("Chapter %1 of %2\nChapter ID: %3\nBlocks: %4\n字数：%5\n汉字：%6")
                                   .arg(chapter.index + 1)
@@ -654,6 +662,7 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
 }
 
 void MainWindow::clearBookView() {
+    llmWorkbench_->setSelectedChapter(tr("请在阅读工作台选择 Markdown 章节。"), false);
     selectedProjectIndex_ = -1;
     selectedBookIndex_ = -1;
     chapterTree_->clear();
@@ -664,6 +673,35 @@ void MainWindow::clearBookView() {
     chapterStatus_->setText(tr("○ No chapter selected"));
     chapterStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#666;"));
     reader_->clear();
+}
+
+void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
+    const auto* book = selectedBook();
+    const auto* item = chapterTree_->currentItem();
+    if (!book || !item || openedDatabasePath_.isEmpty()) {
+        llmWorkbench_->showChapterPreviewError(tr("请先打开项目并选择章节。"));
+        return;
+    }
+    auto built = ChapterPreviewBuilder::build(
+        workspace_->projects.at(selectedProjectIndex_).metadata.id, *book,
+        item->data(0, kChapterIndexRole).toLongLong(), maximumTokens, reservedTokens);
+    if (const auto* error = std::get_if<storage::StorageError>(&built)) {
+        llmWorkbench_->showChapterPreviewError(error->message);
+        return;
+    }
+    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
+        llmWorkbench_->showChapterPreviewError(error->message);
+        return;
+    }
+    auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+    const auto stored =
+        ChapterPreviewBuilder::store(*database, std::get<ChapterPreview>(std::move(built)));
+    if (const auto* error = std::get_if<storage::StorageError>(&stored)) {
+        llmWorkbench_->showChapterPreviewError(error->message);
+        return;
+    }
+    llmWorkbench_->showChapterPreview(std::get<ChapterPreview>(stored));
 }
 
 void MainWindow::showLoadError(QString message) {

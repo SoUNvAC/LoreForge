@@ -11,13 +11,16 @@
 
 #include <QAction>
 #include <QDockWidget>
+#include <QFontDatabase>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
@@ -41,6 +44,7 @@ class MainWindowTest final : public QObject {
     void importsMarkdownSourceAndReopensProject();
     void countsOnlyParagraphCharacters();
     void keepsMetadataBelowExplorerAndReaderFullHeight();
+    void preparesChapterPreviewAndInvalidatesOnSelection();
 };
 
 namespace {
@@ -126,6 +130,55 @@ void MainWindowTest::importsMarkdownSourceAndReopensProject() {
     QVERIFY(!window.importMarkdownSource(source.path(), failedPath));
     QVERIFY(!QFileInfo::exists(failedPath));
     QCOMPARE(tree->topLevelItemCount(), 3);
+}
+
+void MainWindowTest::preparesChapterPreviewAndInvalidatesOnSelection() {
+    QTemporaryDir source;
+    QTemporaryDir destination;
+    QVERIFY(loreforge::test::createMarkdownFixture(source.path()));
+    loreforge::app::MainWindow window;
+    auto* prepare = window.findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview"));
+    auto* preview = window.findChild<QPlainTextEdit*>(QStringLiteral("llmChapterMessagesPreview"));
+    auto* status = window.findChild<QLabel*>(QStringLiteral("llmChapterPreviewStatus"));
+    QVERIFY(prepare);
+    QVERIFY(!prepare->isEnabled());
+    QVERIFY(window.importMarkdownSource(source.path(),
+                                        destination.filePath(QStringLiteral("preview.loreforge"))));
+    QVERIFY(prepare->isEnabled());
+    prepare->click();
+    QVERIFY2(status->text().contains(QStringLiteral("已保存")), qPrintable(status->text()));
+    QVERIFY(preview->toPlainText().contains(QStringLiteral("她打开了一扇门。")));
+    QVERIFY(!preview->toPlainText().contains(QStringLiteral("Second file.")));
+    auto* original = window.findChild<QPlainTextEdit*>(QStringLiteral("llmChapterSourcePreview"));
+    QVERIFY(original);
+    QVERIFY(original->toPlainText().contains(QStringLiteral("# 第十章")));
+    QVERIFY(!original->toPlainText().contains(QStringLiteral("页面元数据")));
+    if (const auto imagePath = qEnvironmentVariable("LOREFORGE_CHAPTER_PREVIEW_IMAGE");
+        !imagePath.isEmpty()) {
+        const auto fontId =
+            QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc"));
+        const auto families = QFontDatabase::applicationFontFamilies(fontId);
+        if (!families.isEmpty()) {
+            window.setFont(QFont(families.first(), 10));
+        }
+        window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->setCurrentIndex(1);
+        window.resize(1400, 1150);
+        window.show();
+        QTest::qWait(30);
+        QVERIFY(window.grab().save(imagePath));
+    }
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    tree->setCurrentItem(tree->topLevelItem(1));
+    QVERIFY(preview->toPlainText().isEmpty());
+    QVERIFY(original->toPlainText().isEmpty());
+    prepare->click();
+    QVERIFY(preview->toPlainText().contains(QStringLiteral("Second file.")));
+    QVERIFY(!preview->toPlainText().contains(QStringLiteral("她打开了一扇门。")));
+    window.findChild<QSpinBox*>(QStringLiteral("llmChapterContextLimit"))->setValue(1024);
+    QVERIFY(preview->toPlainText().isEmpty());
+    prepare->click();
+    QVERIFY(status->text().contains(QStringLiteral("准备失败")));
+    QVERIFY(preview->toPlainText().isEmpty());
 }
 
 void MainWindowTest::displaysStoredWorkspaceWithoutReorderingDomainData() {

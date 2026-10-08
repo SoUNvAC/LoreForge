@@ -1,5 +1,7 @@
 qt_add_library(
     LoreForgeDesktopUi STATIC
+    chapter_preview.cpp
+    chapter_preview.h
     document_metrics.cpp
     document_metrics.h
     context_inspector.cpp

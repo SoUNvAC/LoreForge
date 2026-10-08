@@ -152,6 +152,23 @@ std::optional<MarkdownSourceError> parseBlocks(document::Chapter& chapter, const
 
 } // namespace
 
+std::variant<document::Chapter, MarkdownSourceError>
+MarkdownSourceParser::parseChapterBytes(document::Chapter chapter, QStringView sourceId,
+                                        const QByteArray& bytes) {
+    QStringDecoder decoder(QStringDecoder::Utf8, QStringConverter::Flag::Stateless);
+    const QString decoded = decoder.decode(bytes);
+    static_cast<void>(decoded);
+    if (decoder.hasError()) {
+        return MarkdownSourceError{MarkdownSourceErrorCode::InvalidUtf8,
+                                   QStringLiteral("Invalid UTF-8 chapter source.")};
+    }
+    chapter.blocks.clear();
+    if (const auto error = parseBlocks(chapter, sourceId.toString(), bytes)) {
+        return *error;
+    }
+    return chapter;
+}
+
 MarkdownSourceResult MarkdownSourceParser::parseDirectory(QStringView path,
                                                           const MarkdownSourceOptions& options) {
     QFileInfo input(path.toString());

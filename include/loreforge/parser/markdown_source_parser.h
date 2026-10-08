@@ -2,6 +2,7 @@
 
 #include "loreforge/document/document.h"
 
+#include <QByteArray>
 #include <QStringList>
 #include <QStringView>
 
@@ -47,6 +48,9 @@ class MarkdownSourceParser final {
     // One linked file is one chapter; nested headings never create extra chapters.
     [[nodiscard]] static MarkdownSourceResult
     parseDirectory(QStringView path, const MarkdownSourceOptions& options = {});
+    // Reparse a single read-only source file using the same narrative dialect as import.
+    [[nodiscard]] static std::variant<document::Chapter, MarkdownSourceError>
+    parseChapterBytes(document::Chapter chapter, QStringView sourceId, const QByteArray& bytes);
 };
 
 } // namespace loreforge::parser

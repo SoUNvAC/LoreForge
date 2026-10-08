@@ -43,6 +43,7 @@ class StorageIntegrationTest final : public QObject {
     void persistsHumanRepairDecisionsAndProtectedTerms();
     void rejectsANewerSchemaVersion();
     void rollsBackFailedTransactions();
+    void composesNestedTransactionsWithoutPrematureCommit();
     void rejectsNonSqliteInput();
     void rejectsCorruptStoredDocument();
 };
@@ -745,6 +746,51 @@ void StorageIntegrationTest::rollsBackFailedTransactions() {
     QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(stillMissing));
     QCOMPARE(std::get<loreforge::storage::StorageError>(stillMissing).code,
              loreforge::storage::StorageErrorCode::NotFound);
+}
+
+void StorageIntegrationTest::composesNestedTransactionsWithoutPrematureCommit() {
+    QTemporaryDir directory;
+    auto created = loreforge::storage::ProjectDatabase::create(
+        directory.filePath(QStringLiteral("nested.loreforge")));
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
+    auto database = takeDatabase(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    const auto fail = [] {
+        return loreforge::storage::StorageStatus(loreforge::storage::StorageError{
+            loreforge::storage::StorageErrorCode::TransactionFailed,
+            QStringLiteral("Intentional nested failure."),
+            {},
+            true});
+    };
+    auto status = database->runInTransaction([&]() -> loreforge::storage::StorageStatus {
+        if (const auto inner =
+                database->runInTransaction([&] { return projects.create(projectRecord()); })) {
+            return inner;
+        }
+        return fail();
+    });
+    QVERIFY(status);
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(
+        projects.find(projectRecord().id)));
+    // An inner rollback can be handled while the outer write continues and commits.
+    auto discarded = projectRecord();
+    discarded.id = loreforge::core::ProjectId::fromStableKey(QStringLiteral("discarded-inner"));
+    status = database->runInTransaction([&]() -> loreforge::storage::StorageStatus {
+        const auto inner = database->runInTransaction([&]() -> loreforge::storage::StorageStatus {
+            if (const auto write = projects.create(discarded)) {
+                return write;
+            }
+            return fail();
+        });
+        if (!inner) {
+            return fail();
+        }
+        return projects.create(projectRecord());
+    });
+    QVERIFY(!status);
+    QVERIFY(std::holds_alternative<loreforge::storage::ProjectRecord>(
+        projects.find(projectRecord().id)));
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(projects.find(discarded.id)));
 }
 
 void StorageIntegrationTest::rejectsNonSqliteInput() {

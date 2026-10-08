@@ -809,48 +809,59 @@ int ProjectDatabase::schemaVersion() const noexcept {
 
 StorageStatus ProjectDatabase::runInTransaction(const TransactionWork& work) {
     auto connection = database();
-    if (!connection.transaction()) {
+    // SQLite savepoints compose repository-owned transactions inside a larger atomic write.
+    // The outermost RELEASE commits; inner RELEASE never commits the enclosing transaction.
+    const auto savepoint =
+        QStringLiteral("loreforge_%1").arg(QUuid::createUuid().toString(QUuid::Id128));
+    QSqlQuery control(connection);
+    const auto rollback = [&] {
+        if (!control.exec(QStringLiteral("ROLLBACK TO SAVEPOINT ") + savepoint)) {
+            return false;
+        }
+        return control.exec(QStringLiteral("RELEASE SAVEPOINT ") + savepoint);
+    };
+    if (!control.exec(QStringLiteral("SAVEPOINT ") + savepoint)) {
         return sqlError(StorageErrorCode::TransactionFailed,
                         QStringLiteral("Could not start a database transaction."),
-                        connection.lastError());
+                        control.lastError());
     }
 
     StorageStatus workStatus;
     try {
         workStatus = work();
     } catch (const std::exception& exception) {
-        if (!connection.rollback()) {
+        if (!rollback()) {
             return sqlError(StorageErrorCode::TransactionFailed,
                             QStringLiteral("The operation threw an exception and rollback failed."),
-                            connection.lastError());
+                            control.lastError());
         }
         return makeError(StorageErrorCode::TransactionFailed,
                          QStringLiteral("The database transaction was cancelled."),
                          QString::fromUtf8(exception.what()), true);
     } catch (...) {
-        if (!connection.rollback()) {
+        if (!rollback()) {
             return sqlError(StorageErrorCode::TransactionFailed,
                             QStringLiteral("The operation threw an exception and rollback failed."),
-                            connection.lastError());
+                            control.lastError());
         }
         return makeError(StorageErrorCode::TransactionFailed,
                          QStringLiteral("The database transaction was cancelled."), {}, true);
     }
 
     if (workStatus.has_value()) {
-        if (!connection.rollback()) {
+        if (!rollback()) {
             return sqlError(StorageErrorCode::TransactionFailed,
                             QStringLiteral("The operation failed and rollback also failed."),
-                            connection.lastError());
+                            control.lastError());
         }
         return workStatus;
     }
 
-    if (!connection.commit()) {
+    if (!control.exec(QStringLiteral("RELEASE SAVEPOINT ") + savepoint)) {
         const auto commitError = sqlError(
             StorageErrorCode::TransactionFailed,
-            QStringLiteral("Could not commit the database transaction."), connection.lastError());
-        connection.rollback();
+            QStringLiteral("Could not commit the database transaction."), control.lastError());
+        static_cast<void>(rollback());
         return commitError;
     }
     return std::nullopt;

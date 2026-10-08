@@ -19,6 +19,7 @@ namespace loreforge::app {
 
 class ContextInspectorWidget;
 class RepairQueueWidget;
+class LlmWorkbench;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -40,6 +41,7 @@ class MainWindow final : public QMainWindow {
     void rejectRepairCandidate(QString candidateId);
     void editRepairSuggestion(QString candidateId, QString suggestion);
     void protectRepairTerm(QString candidateId, QString canonicalSpelling);
+    void prepareChapterPreview(int maximumTokens, int reservedTokens);
 
   private:
     void setWorkspace(StoredWorkspace workspace);
@@ -60,6 +62,7 @@ class MainWindow final : public QMainWindow {
     QLabel* chapterStatus_ = nullptr;
     ContextInspectorWidget* contextInspector_ = nullptr;
     RepairQueueWidget* repairQueue_ = nullptr;
+    LlmWorkbench* llmWorkbench_ = nullptr;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;

@@ -10,7 +10,9 @@ maintained with the project planning materials.
 
 LLM desktop integration has begun with a separate workbench tab for the user's LAN-hosted
 single-model API: configuration, synthetic connection/JSON probes, cancellation and honest
-response metrics. Chapter analysis and the three-role workflow are not yet enabled.
+response metrics. Markdown chapters now support source-checked, versioned snapshots stored
+in the project and complete message previews with heuristic budget checks, without sending
+novel text. Chapter analysis and the three-role workflow are not yet enabled.
 See [LLM workbench](docs/llm-workbench.md) and the original
 [integration proposal](docs/llm-cloud-integration-plan.md).
 
