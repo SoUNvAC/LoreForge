@@ -102,6 +102,10 @@ do not count. Supplementary-plane Han characters count once, not as two UTF-16
 code units. For example, `你好，world！2026` has total 11 and Han 2. Existing
 word-based analysis/token-estimation APIs retain their separate word-count policy.
 
+The book summary and metadata sit in a scrollable panel below Project Explorer.
+Explorer initially takes one quarter of the left column; its divider is adjustable.
+The Reader occupies the entire right-hand central panel height.
+
 Synthetic fixtures cover TOC ordering, Chinese text, UTF-8 byte spans, BOM/CRLF,
 front matter, repeated headings, stable IDs, content hashes, invalid inputs,
 read-only import and persisted desktop reopening. They contain no external novel

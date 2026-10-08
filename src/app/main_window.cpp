@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QScrollArea>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTemporaryDir>
@@ -100,6 +101,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     centralLayout->addWidget(workspaceStatus_);
 
     auto* splitter = new QSplitter(Qt::Horizontal, central);
+    splitter->setObjectName(QStringLiteral("workspaceSplitter"));
+    auto* projectColumn = new QSplitter(Qt::Vertical, splitter);
+    projectColumn->setObjectName(QStringLiteral("projectColumnSplitter"));
+    projectColumn->setChildrenCollapsible(false);
     projectExplorer_ = new QTreeWidget;
     projectExplorer_->setObjectName(QStringLiteral("projectExplorer"));
     projectExplorer_->setHeaderLabels({tr("Project / Book"), tr("Kind")});
@@ -107,7 +112,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     projectExplorer_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     projectExplorer_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     projectExplorer_->setMinimumWidth(260);
-    splitter->addWidget(panel(tr("Project Explorer"), projectExplorer_, splitter));
+    auto* explorerPanel = panel(tr("Project Explorer"), projectExplorer_, projectColumn);
+    explorerPanel->setObjectName(QStringLiteral("projectExplorerPanel"));
+    projectColumn->addWidget(explorerPanel);
+
+    auto* metadataScroll = new QScrollArea(projectColumn);
+    metadataScroll->setObjectName(QStringLiteral("metadataScrollArea"));
+    metadataScroll->setWidgetResizable(true);
+    metadataScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    metadataScroll->setFrameShape(QFrame::NoFrame);
+    projectColumn->addWidget(metadataScroll);
+    projectColumn->setStretchFactor(0, 1);
+    projectColumn->setStretchFactor(1, 3);
+    projectColumn->setSizes({180, 540});
+    splitter->addWidget(projectColumn);
 
     chapterTree_ = new QTreeWidget;
     chapterTree_->setObjectName(QStringLiteral("chapterTree"));
@@ -123,7 +141,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     chapterTree_->setMinimumWidth(310);
     splitter->addWidget(panel(tr("Chapter Tree"), chapterTree_, splitter));
 
-    auto* details = new QWidget(splitter);
+    auto* details = new QWidget(metadataScroll);
+    details->setObjectName(QStringLiteral("metadataPanel"));
     auto* detailsLayout = new QVBoxLayout(details);
     detailsLayout->setContentsMargins(0, 0, 0, 0);
     documentSummary_ =
@@ -155,14 +174,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     chapterStatus_->setObjectName(QStringLiteral("chapterStatus"));
     chapterStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#666;"));
     detailsLayout->addWidget(chapterStatus_);
+    detailsLayout->addStretch();
+    for (auto* label :
+         {documentSummary_, bookMetadata_, sourceInfo_, chapterMetadata_, chapterStatus_}) {
+        label->setWordWrap(true);
+        label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        label->setMinimumWidth(0);
+    }
+    metadataScroll->setWidget(details);
 
-    reader_ = new QTextBrowser(details);
+    reader_ = new QTextBrowser;
     reader_->setObjectName(QStringLiteral("chapterReader"));
     reader_->setHtml(
         tr("<h2>LoreForge</h2><p>Use File &gt; Import Markdown Source to read a maintained "
            "novel directory containing SUMMARY.md, or Open Project to inspect stored data.</p>"));
-    detailsLayout->addWidget(panel(tr("Reader"), reader_, details), 1);
-    splitter->addWidget(details);
+    auto* readerPanel = panel(tr("Reader"), reader_, splitter);
+    readerPanel->setObjectName(QStringLiteral("readerPanel"));
+    splitter->addWidget(readerPanel);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 0);
     splitter->setStretchFactor(2, 1);

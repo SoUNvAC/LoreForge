@@ -15,6 +15,8 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -38,6 +40,7 @@ class MainWindowTest final : public QObject {
     void loadsAndPersistsRepairQueueFromStoredProject();
     void importsMarkdownSourceAndReopensProject();
     void countsOnlyParagraphCharacters();
+    void keepsMetadataBelowExplorerAndReaderFullHeight();
 };
 
 namespace {
@@ -199,6 +202,50 @@ void MainWindowTest::displaysStoredWorkspaceWithoutReorderingDomainData() {
     QVERIFY(reader->toPlainText().contains(QStringLiteral("Goodbye.")));
     QVERIFY(chapterMetadata->text().contains(QStringLiteral("Chapter 2 of 2")));
     QVERIFY(chapterMetadata->text().contains(QStringLiteral("字数：7\n汉字：0")));
+}
+
+void MainWindowTest::keepsMetadataBelowExplorerAndReaderFullHeight() {
+    QTemporaryDir directory;
+    const auto databasePath = directory.filePath(QStringLiteral("layout.loreforge"));
+    auto database = createStoredFixture(databasePath);
+    QVERIFY(database != nullptr);
+    database.reset();
+    loreforge::app::MainWindow window;
+    QVERIFY(window.openProjectFile(databasePath));
+    for (auto* dock : window.findChildren<QDockWidget*>()) {
+        dock->hide();
+    }
+    window.show();
+    QTest::qWait(30);
+    auto* horizontal = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
+    auto* column = window.findChild<QSplitter*>(QStringLiteral("projectColumnSplitter"));
+    auto* metadata = window.findChild<QScrollArea*>(QStringLiteral("metadataScrollArea"));
+    auto* readerPanel = window.findChild<QWidget*>(QStringLiteral("readerPanel"));
+    QVERIFY(horizontal != nullptr);
+    QVERIFY(column != nullptr);
+    QVERIFY(metadata != nullptr);
+    QVERIFY(readerPanel != nullptr);
+    QCOMPARE(horizontal->count(), 3);
+    QCOMPARE(horizontal->widget(0), column);
+    QCOMPARE(horizontal->widget(2), readerPanel);
+    QCOMPARE(column->orientation(), Qt::Vertical);
+    QCOMPARE(column->count(), 2);
+    QCOMPARE(column->widget(1), metadata);
+    const auto sizes = column->sizes();
+    const auto ratio = double(sizes.first()) / double(sizes.first() + sizes.last());
+    QVERIFY2(ratio > 0.22 && ratio < 0.28, qPrintable(QString::number(ratio)));
+    for (const auto& name :
+         {"documentSummary", "bookMetadata", "sourceInfo", "chapterMetadata", "chapterStatus"}) {
+        auto* label = window.findChild<QLabel*>(QString::fromLatin1(name));
+        QVERIFY(label != nullptr);
+        QVERIFY(metadata->isAncestorOf(label));
+        QVERIFY(!readerPanel->isAncestorOf(label));
+    }
+    QVERIFY(readerPanel->isAncestorOf(
+        window.findChild<QTextBrowser*>(QStringLiteral("chapterReader"))));
+    QCOMPARE(readerPanel->height(), column->height());
+    QVERIFY(metadata->widgetResizable());
+    QCOMPARE(metadata->horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
 }
 
 void MainWindowTest::countsOnlyParagraphCharacters() {
