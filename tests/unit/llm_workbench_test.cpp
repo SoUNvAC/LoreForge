@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
@@ -17,6 +18,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 namespace {
@@ -111,6 +113,7 @@ class LlmWorkbenchTest final : public QObject {
     void testsPrivateApiWithoutSendingSource();
     void rejectsUnsafeConfigurationAndRedactsFailures();
     void supportsCancellationAndMissingUsage();
+    void resetsTokenCountsOnlyAfterConfirmation();
 };
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
@@ -243,6 +246,66 @@ void LlmWorkbenchTest::supportsCancellationAndMissingUsage() {
     QTRY_VERIFY(child<QPushButton>(page, "llmTestConnection")->isEnabled());
     QVERIFY(child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("已取消")));
     QCOMPARE(server.requests.size(), 2);
+}
+
+void LlmWorkbenchTest::resetsTokenCountsOnlyAfterConfirmation() {
+    QTemporaryDir directory;
+    ProbeServer server;
+    const auto settingsPath = directory.filePath(QStringLiteral("profile.ini"));
+    loreforge::app::LlmWorkbench page(nullptr, settingsPath);
+    configure(page, server.endpoint());
+    auto* test = child<QPushButton>(page, "llmTestConnection");
+    auto* reset = child<QPushButton>(page, "llmResetTokenCounts");
+    auto* totals = child<QLabel>(page, "llmTestTotals");
+    test->click();
+    QVERIFY(!reset->isEnabled());
+    QTRY_VERIFY_WITH_TIMEOUT(test->isEnabled(), 3000);
+    QVERIFY(reset->isEnabled());
+    QVERIFY(totals->text().contains(QStringLiteral("总计 14")));
+    server.setResponse(false);
+    test->click();
+    QTRY_VERIFY_WITH_TIMEOUT(test->isEnabled(), 3000);
+    QVERIFY(totals->text().contains(QStringLiteral("1 次用量未知")));
+    const auto previousTotals = totals->text();
+    const auto previousMetrics = child<QLabel>(page, "llmTestMetrics")->text();
+    const auto previousStatus = child<QLabel>(page, "llmConnectionStatus")->text();
+    QTimer::singleShot(0, &page, [&page] {
+        auto* dialog = child<QMessageBox>(page, "llmResetTokenConfirmation");
+        QVERIFY(dialog);
+        auto* cancel = child<QPushButton>(*dialog, "llmCancelTokenReset");
+        QCOMPARE(dialog->defaultButton(), cancel);
+        QCOMPARE(cancel->text(), QStringLiteral("取消"));
+        cancel->click();
+    });
+    reset->click();
+    QCOMPARE(totals->text(), previousTotals);
+    QTimer::singleShot(0, &page, [&page] {
+        auto* dialog = child<QMessageBox>(page, "llmResetTokenConfirmation");
+        QVERIFY(dialog);
+        dialog->reject();
+    });
+    reset->click();
+    QCOMPARE(totals->text(), previousTotals);
+    QTimer::singleShot(0, &page, [&page] {
+        auto* dialog = child<QMessageBox>(page, "llmResetTokenConfirmation");
+        QVERIFY(dialog);
+        auto* confirm = child<QPushButton>(*dialog, "llmConfirmTokenReset");
+        QCOMPARE(confirm->text(), QStringLiteral("确认"));
+        confirm->click();
+    });
+    reset->click();
+    QVERIFY(totals->text().contains(QStringLiteral("输入 0 · 输出 0 · 总计 0")));
+    QVERIFY(totals->text().contains(QStringLiteral("0 次用量未知")));
+    QCOMPARE(child<QLabel>(page, "llmTestMetrics")->text(), previousMetrics);
+    QCOMPARE(child<QLabel>(page, "llmConnectionStatus")->text(), previousStatus);
+    QCOMPARE(child<QLineEdit>(page, "llmEndpoint")->text(), server.endpoint());
+    QCOMPARE(server.requests.size(), 2);
+    server.setResponse(true);
+    test->click();
+    QTRY_VERIFY_WITH_TIMEOUT(test->isEnabled(), 3000);
+    QVERIFY(totals->text().contains(QStringLiteral("总计 14")));
+    loreforge::app::LlmWorkbench restored(nullptr, settingsPath);
+    QVERIFY(child<QLabel>(restored, "llmTestTotals")->text().contains(QStringLiteral("尚无响应")));
 }
 
 QTEST_MAIN(LlmWorkbenchTest)

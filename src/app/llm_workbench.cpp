@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -128,6 +129,10 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     totals_->setObjectName(QStringLiteral("llmTestTotals"));
     totals_->setWordWrap(true);
     layout->addWidget(totals_);
+    resetTokens_ = new QPushButton(tr("重置token计数"), this);
+    resetTokens_->setObjectName(QStringLiteral("llmResetTokenCounts"));
+    resetTokens_->setToolTip(tr("仅重置本会话连接测试累计，不修改项目、连接配置或上次响应。"));
+    layout->addWidget(resetTokens_, 0, Qt::AlignLeft);
     auto* roles = new QTableWidget(3, 4, this);
     roles->setObjectName(QStringLiteral("llmRoleStatus"));
     roles->setHorizontalHeaderLabels({tr("角色"), tr("状态"), tr("Token"), tr("耗时")});
@@ -164,6 +169,7 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     connect(save_, &QPushButton::clicked, this, &LlmWorkbench::saveConfiguration);
     connect(test_, &QPushButton::clicked, this, &LlmWorkbench::testConnection);
     connect(cancel_, &QPushButton::clicked, this, &LlmWorkbench::cancelTest);
+    connect(resetTokens_, &QPushButton::clicked, this, &LlmWorkbench::resetTokenCounts);
     const auto changed = [this] { connection_->setText(tr("配置已修改，请重新测试")); };
     connect(endpoint_, &QLineEdit::textChanged, this, changed);
     connect(modelId_, &QLineEdit::textChanged, this, changed);
@@ -229,7 +235,7 @@ void LlmWorkbench::saveConfiguration() {
 void LlmWorkbench::setBusy(bool busy) {
     for (auto* widget :
          QList<QWidget*>{endpoint_, modelSize_, modelId_, apiKey_, allowHttp_, format_, tokenField_,
-                         timeout_, outputBudget_, save_, test_}) {
+                         timeout_, outputBudget_, save_, test_, resetTokens_}) {
         widget->setEnabled(!busy);
     }
     cancel_->setEnabled(busy);
@@ -293,6 +299,32 @@ void LlmWorkbench::cancelTest() {
     }
 }
 
+void LlmWorkbench::resetTokenCounts() {
+    if (!requestId_.isNull()) {
+        return;
+    }
+    QMessageBox dialog(QMessageBox::Question, tr("重置token计数"),
+                       tr("确认清零本会话连接测试的累计输入、输出 token 和用量未知次数？\n"
+                          "不会修改项目、连接配置或上次响应，也不会重置服务端统计。"),
+                       QMessageBox::NoButton, this);
+    dialog.setObjectName(QStringLiteral("llmResetTokenConfirmation"));
+    auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
+    confirm->setObjectName(QStringLiteral("llmConfirmTokenReset"));
+    auto* cancel = dialog.addButton(tr("取消"), QMessageBox::RejectRole);
+    cancel->setObjectName(QStringLiteral("llmCancelTokenReset"));
+    dialog.setDefaultButton(cancel);
+    dialog.setEscapeButton(cancel);
+    dialog.exec();
+    if (dialog.clickedButton() != confirm) {
+        return;
+    }
+    inputTokens_ = 0;
+    outputTokens_ = 0;
+    missingUsage_ = 0;
+    updateTokenTotals();
+    log_->appendPlainText(tr("本会话连接测试 token 累计已重置；上次响应与连接配置保留。"));
+}
+
 void LlmWorkbench::finishTest(llm::LLMResult result) {
     requestId_ = {};
     setBusy(false);
@@ -345,6 +377,10 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
         }
         log_->appendPlainText(connection_->text());
     }
+    updateTokenTotals();
+}
+
+void LlmWorkbench::updateTokenTotals() {
     totals_->setText(
         tr("本会话连接测试累计已知：输入 %1 · 输出 %2 · 总计 %3 token；%4 次用量未知。\n"
            "项目/每章节 token：尚无章节任务，不包含连接测试。")

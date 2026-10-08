@@ -27,6 +27,8 @@ class LlmWorkbench final : public QWidget {
     void saveConfiguration();
     void testConnection();
     void cancelTest();
+    void resetTokenCounts();
+    void updateTokenTotals();
     void setBusy(bool busy);
     void finishTest(llm::LLMResult result);
     [[nodiscard]] QString configurationError() const;
@@ -45,6 +47,7 @@ class LlmWorkbench final : public QWidget {
     QPushButton* save_ = nullptr;
     QPushButton* test_ = nullptr;
     QPushButton* cancel_ = nullptr;
+    QPushButton* resetTokens_ = nullptr;
     QLabel* connection_ = nullptr;
     QLabel* metrics_ = nullptr;
     QLabel* totals_ = nullptr;
