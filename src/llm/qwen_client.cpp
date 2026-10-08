@@ -25,7 +25,7 @@ QString roleName(LLMRole role) {
     return {};
 }
 
-QByteArray requestPayload(const LLMRequest& request, QStringView model) {
+QByteArray requestPayload(const LLMRequest& request, QStringView model, const QString& tokenField) {
     QJsonArray messages;
     for (const auto& message : request.messages) {
         messages.append(QJsonObject{{QStringLiteral("role"), roleName(message.role)},
@@ -39,7 +39,7 @@ QByteArray requestPayload(const LLMRequest& request, QStringView model) {
         payload.insert(QStringLiteral("response_format"), request.responseFormat);
     }
     if (request.maxCompletionTokens > 0) {
-        payload.insert(QStringLiteral("max_completion_tokens"), request.maxCompletionTokens);
+        payload.insert(tokenField, request.maxCompletionTokens);
     }
     return QJsonDocument(payload).toJson(QJsonDocument::Compact);
 }
@@ -59,7 +59,7 @@ bool isRetryableHttpStatus(int status) {
 }
 
 std::optional<TokenUsage> tokenUsage(const QJsonValue& value) {
-    if (value.isUndefined()) {
+    if (value.isUndefined() || value.isNull()) {
         return TokenUsage{};
     }
     if (!value.isObject()) {
@@ -211,14 +211,22 @@ void QwenClient::sendAttempt() {
                            ? options_.defaultModel.trimmed()
                            : active_->request.model.trimmed();
     QNetworkRequest networkRequest(options_.endpoint);
+    networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                                QNetworkRequest::ManualRedirectPolicy);
     networkRequest.setHeader(QNetworkRequest::ContentTypeHeader,
                              QStringLiteral("application/json"));
-    networkRequest.setRawHeader(QByteArrayLiteral("Authorization"),
-                                QByteArrayLiteral("Bearer ") + options_.apiKey);
+    if (!options_.apiKey.trimmed().isEmpty()) {
+        networkRequest.setRawHeader(QByteArrayLiteral("Authorization"),
+                                    QByteArrayLiteral("Bearer ") + options_.apiKey);
+    }
     networkRequest.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
     networkRequest.setRawHeader(QByteArrayLiteral("User-Agent"),
                                 QByteArrayLiteral("LoreForge/0.1"));
-    activePayload_ = requestPayload(active_->request, model);
+    activePayload_ =
+        requestPayload(active_->request, model,
+                       options_.completionTokenParameter == CompletionTokenParameter::MaxTokens
+                           ? QStringLiteral("max_tokens")
+                           : QStringLiteral("max_completion_tokens"));
     reply_ = network_.post(networkRequest, activePayload_);
     connect(reply_, &QNetworkReply::finished, this, &QwenClient::handleReplyFinished);
     timeoutTimer_.start(active_->request.timeoutMs);
@@ -328,7 +336,8 @@ void QwenClient::handleReplyFinished() {
         LLMResponse{object.value(QStringLiteral("id")).toString(),
                     object.value(QStringLiteral("model")).toString(), contentValue.toString(),
                     choice.value(QStringLiteral("finish_reason")).toString(), parsedContent, *usage,
-                    active_->attemptCount, requestTimer_.elapsed(), activePayload_, payload});
+                    active_->attemptCount, requestTimer_.elapsed(), activePayload_, payload,
+                    object.value(QStringLiteral("usage")).isObject()});
 }
 
 void QwenClient::handleTimeout() {
@@ -372,7 +381,12 @@ std::optional<LLMError> QwenClient::validate(const LLMRequest& request) const {
     const auto scheme = options_.endpoint.scheme().toLower();
     if (!options_.endpoint.isValid() ||
         (scheme != QStringLiteral("https") && scheme != QStringLiteral("http")) ||
-        options_.apiKey.trimmed().isEmpty() ||
+        options_.endpoint.host().isEmpty() || !options_.endpoint.userInfo().isEmpty() ||
+        options_.endpoint.hasQuery() || options_.endpoint.hasFragment() ||
+        (!options_.allowUnauthenticated && options_.apiKey.trimmed().isEmpty()) ||
+        options_.apiKey.contains('\r') || options_.apiKey.contains('\n') ||
+        (options_.completionTokenParameter != CompletionTokenParameter::MaxCompletionTokens &&
+         options_.completionTokenParameter != CompletionTokenParameter::MaxTokens) ||
         (request.model.trimmed().isEmpty() && options_.defaultModel.trimmed().isEmpty())) {
         return LLMError{LLMErrorCode::InvalidConfiguration,
                         QStringLiteral("Qwen endpoint, API key, and model are required."),

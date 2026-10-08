@@ -204,3 +204,8 @@ target_link_libraries(
 
 add_test(NAME LoreForgeMainWindowTests COMMAND LoreForgeMainWindowTests)
 set_tests_properties(LoreForgeMainWindowTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(LoreForgeLlmWorkbenchTests llm_workbench_test.cpp)
+target_link_libraries(LoreForgeLlmWorkbenchTests PRIVATE LoreForge::DesktopUi Qt6::Test Qt6::Network)
+add_test(NAME LoreForgeLlmWorkbenchTests COMMAND LoreForgeLlmWorkbenchTests)
+set_tests_properties(LoreForgeLlmWorkbenchTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

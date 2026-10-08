@@ -64,6 +64,8 @@ struct LLMResponse final {
     QByteArray rawRequest;
     QByteArray rawResponse;
 
+    bool usageReported = false;
+
     friend bool operator==(const LLMResponse&, const LLMResponse&) = default;
 };
 

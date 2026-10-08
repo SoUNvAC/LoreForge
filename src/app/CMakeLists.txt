@@ -6,6 +6,8 @@ qt_add_library(
     context_inspector.h
     main_window.cpp
     main_window.h
+    llm_workbench.cpp
+    llm_workbench.h
     project_workspace.cpp
     project_workspace.h
     repair_queue_widget.cpp
@@ -27,6 +29,7 @@ target_link_libraries(
         LoreForge::Parser
         LoreForge::Proofreading
         LoreForge::Context
+        LoreForge::Llm
         LoreForge::Text
         LoreForge::ProjectOptions
         Qt6::Widgets

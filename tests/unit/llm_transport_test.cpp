@@ -23,6 +23,7 @@ struct HttpResponse final {
     int status = 200;
     QByteArray body;
     bool respond = true;
+    QByteArray extraHeaders;
 };
 
 class ScriptedHttpServer final : public QObject {
@@ -99,12 +100,12 @@ class ScriptedHttpServer final : public QObject {
         }
         const auto reason = response.status == 200 ? QByteArrayLiteral("OK")
                                                    : QByteArrayLiteral("Service Unavailable");
-        const auto wire =
-            QByteArrayLiteral("HTTP/1.1 ") + QByteArray::number(response.status) +
-            QByteArrayLiteral(" ") + reason +
-            QByteArrayLiteral("\r\nContent-Type: application/json\r\nContent-Length: ") +
-            QByteArray::number(response.body.size()) +
-            QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + response.body;
+        const auto wire = QByteArrayLiteral("HTTP/1.1 ") + QByteArray::number(response.status) +
+                          QByteArrayLiteral(" ") + reason + QByteArrayLiteral("\r\n") +
+                          response.extraHeaders +
+                          QByteArrayLiteral("Content-Type: application/json\r\nContent-Length: ") +
+                          QByteArray::number(response.body.size()) +
+                          QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + response.body;
         socket->write(wire);
         socket->disconnectFromHost();
     }
@@ -173,6 +174,8 @@ class LLMTransportTest final : public QObject {
     void retriesRetryableHttpFailures();
     void timesOutUnresponsiveRequests();
     void cancelsActiveAndQueuedRequests();
+    void requiresExplicitUnauthenticatedConfiguration();
+    void doesNotFollowRedirects();
 };
 
 void LLMTransportTest::mockAndQwenUseTheSameInterface() {
@@ -187,6 +190,40 @@ void LLMTransportTest::mockAndQwenUseTheSameInterface() {
     QVERIFY(!requestId.isNull());
     QVERIFY(result.has_value());
     QVERIFY(std::holds_alternative<loreforge::llm::LLMResponse>(*result));
+}
+
+void LLMTransportTest::requiresExplicitUnauthenticatedConfiguration() {
+    ScriptedHttpServer server;
+    loreforge::llm::QwenClient client({server.endpoint(), {}, u"fixture"_s});
+    std::optional<loreforge::llm::LLMResult> result;
+    const auto id =
+        client.enqueue(request(), [&result](const QUuid&, loreforge::llm::LLMResult value) {
+            result = std::move(value);
+        });
+    QVERIFY(!id.isNull());
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMError>(*result));
+    QCOMPARE(std::get<loreforge::llm::LLMError>(*result).code,
+             loreforge::llm::LLMErrorCode::InvalidConfiguration);
+    QCOMPARE(server.requestCount(), 0);
+}
+
+void LLMTransportTest::doesNotFollowRedirects() {
+    ScriptedHttpServer origin;
+    ScriptedHttpServer destination;
+    origin.enqueue({302, QByteArrayLiteral("{}"), true,
+                    QByteArrayLiteral("Location: ") + destination.endpoint().toEncoded() + "\r\n"});
+    auto client = makeClient(origin);
+    std::optional<loreforge::llm::LLMResult> result;
+    const auto id =
+        client.enqueue(request(), [&result](const QUuid&, loreforge::llm::LLMResult value) {
+            result = std::move(value);
+        });
+    QVERIFY(!id.isNull());
+    QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 1000);
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMError>(*result));
+    QCOMPARE(std::get<loreforge::llm::LLMError>(*result).httpStatus, 302);
+    QCOMPARE(destination.requestCount(), 0);
 }
 
 void LLMTransportTest::sendsStructuredRequestsAndReadsUsage() {
@@ -206,6 +243,7 @@ void LLMTransportTest::sendsStructuredRequestsAndReadsUsage() {
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 1'000);
     QVERIFY(std::holds_alternative<loreforge::llm::LLMResponse>(*result));
     const auto& response = std::get<loreforge::llm::LLMResponse>(*result);
+    QVERIFY(response.usageReported);
     QCOMPARE(response.providerRequestId, u"chatcmpl-fixture"_s);
     QCOMPARE(response.model, u"qwen-fixture"_s);
     QCOMPARE(response.usage, (loreforge::llm::TokenUsage{4, 3, 7}));

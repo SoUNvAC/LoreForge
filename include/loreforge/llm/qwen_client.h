@@ -15,10 +15,15 @@ class QNetworkReply;
 
 namespace loreforge::llm {
 
+enum class CompletionTokenParameter { MaxCompletionTokens, MaxTokens };
+
 struct QwenClientOptions final {
     QUrl endpoint;
     QByteArray apiKey;
     QString defaultModel;
+    bool allowUnauthenticated = false;
+    CompletionTokenParameter completionTokenParameter =
+        CompletionTokenParameter::MaxCompletionTokens;
 
     friend bool operator==(const QwenClientOptions&, const QwenClientOptions&) = default;
 };

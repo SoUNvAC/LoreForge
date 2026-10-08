@@ -8,9 +8,11 @@ maintained with the project planning materials.
 
 ## Current baseline
 
-Cloud LLM desktop integration is at the proposal stage; model configuration and live
-chapter analysis are not yet connected to the GUI. See the
-[cloud LLM integration proposal](docs/llm-cloud-integration-plan.md) for scope, stages and acceptance gates.
+LLM desktop integration has begun with a separate workbench tab for the user's LAN-hosted
+single-model API: configuration, synthetic connection/JSON probes, cancellation and honest
+response metrics. Chapter analysis and the three-role workflow are not yet enabled.
+See [LLM workbench](docs/llm-workbench.md) and the original
+[integration proposal](docs/llm-cloud-integration-plan.md).
 
 Maintained Markdown source trees are the primary desktop import workflow. Use
 **File > Import Markdown Source** with a directory containing `SUMMARY.md`, then

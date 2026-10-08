@@ -2,6 +2,7 @@
 
 #include "context_inspector.h"
 #include "document_metrics.h"
+#include "llm_workbench.h"
 #include "loreforge/parser/markdown_source_parser.h"
 #include "loreforge/storage/book_repository.h"
 #include "loreforge/storage/project_database.h"
@@ -22,6 +23,7 @@
 #include <QScrollArea>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTreeWidget>
@@ -100,7 +102,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     workspaceStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#666;"));
     centralLayout->addWidget(workspaceStatus_);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, central);
+    auto* pages = new QTabWidget(central);
+    pages->setObjectName(QStringLiteral("workspacePages"));
+    auto* readingPage = new QWidget(pages);
+    auto* readingLayout = new QVBoxLayout(readingPage);
+    readingLayout->setContentsMargins(0, 0, 0, 0);
+    auto* splitter = new QSplitter(Qt::Horizontal, readingPage);
     splitter->setObjectName(QStringLiteral("workspaceSplitter"));
     auto* projectColumn = new QSplitter(Qt::Vertical, splitter);
     projectColumn->setObjectName(QStringLiteral("projectColumnSplitter"));
@@ -194,7 +201,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 0);
     splitter->setStretchFactor(2, 1);
-    centralLayout->addWidget(splitter, 1);
+    readingLayout->addWidget(splitter);
+    pages->addTab(readingPage, tr("阅读工作台"));
+    auto* llmScroll = new QScrollArea(pages);
+    llmScroll->setWidgetResizable(true);
+    llmScroll->setFrameShape(QFrame::NoFrame);
+    llmScroll->setWidget(new LlmWorkbench(llmScroll));
+    pages->addTab(llmScroll, tr("LLM 工作台"));
+    centralLayout->addWidget(pages, 1);
     setCentralWidget(central);
 
     contextInspector_ = new ContextInspectorWidget(this);
@@ -212,6 +226,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     repairDock->setMinimumWidth(440);
     addDockWidget(Qt::BottomDockWidgetArea, repairDock);
     viewMenu->addAction(repairDock->toggleViewAction());
+    connect(
+        pages, &QTabWidget::currentChanged, this,
+        [contextDock, repairDock, contextVisible = true, repairVisible = true](int index) mutable {
+            if (index == 1) {
+                contextVisible = !contextDock->isHidden();
+                repairVisible = !repairDock->isHidden();
+                contextDock->hide();
+                repairDock->hide();
+            } else {
+                contextDock->setVisible(contextVisible);
+                repairDock->setVisible(repairVisible);
+            }
+            contextDock->toggleViewAction()->setEnabled(index == 0);
+            repairDock->toggleViewAction()->setEnabled(index == 0);
+        });
     connect(repairQueue_, &RepairQueueWidget::candidateApproved, this,
             &MainWindow::approveRepairCandidate);
     connect(repairQueue_, &RepairQueueWidget::candidateRejected, this,
