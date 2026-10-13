@@ -106,8 +106,9 @@ void MainWindowTest::importsMarkdownSourceAndReopensProject() {
     const auto path = destination.filePath(QStringLiteral("novel.loreforge"));
     loreforge::app::MainWindow window;
     QVERIFY(window.findChild<QAction*>(QStringLiteral("importMarkdownSourceAction")));
-    QVERIFY2(window.importMarkdownSource(source.path(), path),
-             qPrintable(window.statusBar()->currentMessage()));
+    QVERIFY2(
+        window.importMarkdownSource(source.path(), path),
+        qPrintable(window.findChild<QLabel*>(QStringLiteral("workspaceStatusMessage"))->text()));
     auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
     QCOMPARE(tree->topLevelItemCount(), 3);
     QCOMPARE(tree->topLevelItem(0)->text(0), QStringLiteral("第二卷 / 后写的章节"));

@@ -27,6 +27,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -84,7 +85,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(tr("LoreForge"));
     resize(1280, 760);
     taskIndicator_ = new TaskIndicator(this);
-    statusBar()->addPermanentWidget(taskIndicator_);
+    statusBar()->addWidget(taskIndicator_);
+    statusMessage_ = new QLabel(this);
+    statusMessage_->setObjectName(QStringLiteral("workspaceStatusMessage"));
+    statusMessage_->setTextFormat(Qt::PlainText);
+    statusMessage_->setMinimumWidth(0);
+    statusMessage_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    statusBar()->addWidget(statusMessage_, 1);
+    statusMessageTimer_ = new QTimer(this);
+    statusMessageTimer_->setSingleShot(true);
+    connect(statusMessageTimer_, &QTimer::timeout, this, [this] {
+        statusMessage_->clear();
+        statusMessage_->setToolTip({});
+    });
 
     auto* openAction = new QAction(tr("Open Project..."), this);
     openAction->setObjectName(QStringLiteral("openProjectAction"));
@@ -312,11 +325,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(projectExplorer_, &QTreeWidget::currentItemChanged, this,
             &MainWindow::selectProjectItem);
     connect(chapterTree_, &QTreeWidget::currentItemChanged, this, &MainWindow::displayChapter);
-    statusBar()->showMessage(tr("Ready"));
+    showStatusMessage(tr("Ready"));
 }
 
 MainWindow::~MainWindow() {
     analysisController_->cancel();
+}
+
+void MainWindow::showStatusMessage(const QString& message, int timeoutMs) {
+    statusMessageTimer_->stop();
+    statusMessage_->setText(message);
+    statusMessage_->setToolTip(message);
+    if (timeoutMs > 0) {
+        statusMessageTimer_->start(timeoutMs);
+    }
 }
 
 void MainWindow::inspectContext(const context::ContextInspectorData& context) {
@@ -330,7 +352,7 @@ bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projec
     const auto fail = [this, taskId](const QString& message) {
         taskIndicator_->report(taskId, TaskState::Failed, tr("导入失败：%1").arg(message));
         // A failed import leaves the currently opened project usable.
-        statusBar()->showMessage(tr("Import failed: %1").arg(message));
+        showStatusMessage(tr("Import failed: %1").arg(message));
         return false;
     };
     if (const auto* error = std::get_if<parser::MarkdownSourceError>(&parsed)) {
@@ -382,7 +404,7 @@ bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projec
     workspace.databasePath = openedDatabasePath_;
     repairQueue_->setItems({});
     setWorkspace(std::move(workspace));
-    statusBar()->showMessage(
+    showStatusMessage(
         tr("Imported %1 volumes, %2 chapters; %3 supplementary entries excluded. Source unchanged.")
             .arg(imported.volumeCount)
             .arg(imported.document.chapters.size())
@@ -404,7 +426,7 @@ void MainWindow::chooseMarkdownSource() {
         return;
     }
     if (!importMarkdownSource(source, destination)) {
-        QMessageBox::warning(this, tr("Markdown import failed"), statusBar()->currentMessage());
+        QMessageBox::warning(this, tr("Markdown import failed"), statusMessage_->text());
     }
 }
 
@@ -419,7 +441,7 @@ void MainWindow::approveRepairCandidate(QString candidateId) {
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
-        statusBar()->showMessage(tr("Repair decision could not be saved."), 5000);
+        showStatusMessage(tr("Repair decision could not be saved."), 5000);
         reloadRepairQueue();
         return;
     }
@@ -427,12 +449,12 @@ void MainWindow::approveRepairCandidate(QString candidateId) {
     storage::RepairQueueRepository repairs(*database);
     const auto status = repairs.approve(*id, QDateTime::currentDateTimeUtc());
     if (status.has_value()) {
-        statusBar()->showMessage(status->message, 5000);
+        showStatusMessage(status->message, 5000);
         database.reset();
         reloadRepairQueue();
         return;
     }
-    statusBar()->showMessage(tr("Candidate approved."), 3000);
+    showStatusMessage(tr("Candidate approved."), 3000);
 }
 
 void MainWindow::rejectRepairCandidate(QString candidateId) {
@@ -442,7 +464,7 @@ void MainWindow::rejectRepairCandidate(QString candidateId) {
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
-        statusBar()->showMessage(tr("Repair decision could not be saved."), 5000);
+        showStatusMessage(tr("Repair decision could not be saved."), 5000);
         reloadRepairQueue();
         return;
     }
@@ -450,12 +472,12 @@ void MainWindow::rejectRepairCandidate(QString candidateId) {
     storage::RepairQueueRepository repairs(*database);
     const auto status = repairs.reject(*id, QDateTime::currentDateTimeUtc());
     if (status.has_value()) {
-        statusBar()->showMessage(status->message, 5000);
+        showStatusMessage(status->message, 5000);
         database.reset();
         reloadRepairQueue();
         return;
     }
-    statusBar()->showMessage(tr("Candidate rejected."), 3000);
+    showStatusMessage(tr("Candidate rejected."), 3000);
 }
 
 void MainWindow::editRepairSuggestion(QString candidateId, QString suggestion) {
@@ -465,7 +487,7 @@ void MainWindow::editRepairSuggestion(QString candidateId, QString suggestion) {
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
-        statusBar()->showMessage(tr("Edited suggestion could not be saved."), 5000);
+        showStatusMessage(tr("Edited suggestion could not be saved."), 5000);
         reloadRepairQueue();
         return;
     }
@@ -474,12 +496,12 @@ void MainWindow::editRepairSuggestion(QString candidateId, QString suggestion) {
     const auto status =
         repairs.editSuggestion(*id, std::move(suggestion), QDateTime::currentDateTimeUtc());
     if (status.has_value()) {
-        statusBar()->showMessage(status->message, 5000);
+        showStatusMessage(status->message, 5000);
         database.reset();
         reloadRepairQueue();
         return;
     }
-    statusBar()->showMessage(tr("Suggestion updated; approval is required again."), 3000);
+    showStatusMessage(tr("Suggestion updated; approval is required again."), 3000);
 }
 
 void MainWindow::protectRepairTerm(QString candidateId, QString canonicalSpelling) {
@@ -489,7 +511,7 @@ void MainWindow::protectRepairTerm(QString candidateId, QString canonicalSpellin
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
-        statusBar()->showMessage(tr("Protected term could not be saved."), 5000);
+        showStatusMessage(tr("Protected term could not be saved."), 5000);
         reloadRepairQueue();
         return;
     }
@@ -499,12 +521,12 @@ void MainWindow::protectRepairTerm(QString candidateId, QString canonicalSpellin
         repairs.ignoreAndProtect(*id, tr("Protected from Repair Queue: %1").arg(canonicalSpelling),
                                  QDateTime::currentDateTimeUtc());
     if (status.has_value()) {
-        statusBar()->showMessage(status->message, 5000);
+        showStatusMessage(status->message, 5000);
         database.reset();
         reloadRepairQueue();
         return;
     }
-    statusBar()->showMessage(tr("Candidate rejected and term protected."), 3000);
+    showStatusMessage(tr("Candidate rejected and term protected."), 3000);
 }
 
 void MainWindow::reloadRepairQueue() {
@@ -561,7 +583,7 @@ bool MainWindow::openProjectFile(QStringView filePath) {
     openedDatabasePath_ = absolutePath;
     setWorkspace(std::move(workspace));
     repairQueue_->setItems(std::move(repairItems));
-    statusBar()->showMessage(tr("Opened stored project data from %1").arg(absolutePath), 5000);
+    showStatusMessage(tr("Opened stored project data from %1").arg(absolutePath), 5000);
     return true;
 }
 
@@ -718,11 +740,11 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
     chapterStatus_->setText(tr("● Stored chapter · %1 source spans").arg(metrics.sourceSpanCount));
     chapterStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#167345;"));
     reader_->setHtml(chapterHtml(chapter));
-    statusBar()->showMessage(tr("Chapter %1 of %2 — 字数：%3 · 汉字：%4")
-                                 .arg(chapter.index + 1)
-                                 .arg(book->chapters.size())
-                                 .arg(metrics.characterCount)
-                                 .arg(metrics.hanCharacterCount));
+    showStatusMessage(tr("Chapter %1 of %2 — 字数：%3 · 汉字：%4")
+                          .arg(chapter.index + 1)
+                          .arg(book->chapters.size())
+                          .arg(metrics.characterCount)
+                          .arg(metrics.hanCharacterCount));
 }
 
 void MainWindow::clearBookView() {
@@ -841,7 +863,7 @@ void MainWindow::showLoadError(QString message) {
     workspaceStatus_->setText(tr("Open failed: %1").arg(std::move(message)));
     workspaceStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#a12622;"));
     workspaceStatus_->setToolTip({});
-    statusBar()->showMessage(tr("Open failed"));
+    showStatusMessage(tr("Open failed"));
 }
 
 const document::Document* MainWindow::selectedBook() const {

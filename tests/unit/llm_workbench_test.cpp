@@ -117,6 +117,7 @@ class LlmWorkbenchTest final : public QObject {
     void acknowledgesFailureWithoutChangingTaskHistory();
     void keepsNewerTasksSafeFromLateCallbacks();
     void reportsConnectionTaskStates();
+    void placesTaskIndicatorBeforeWorkspaceStatus();
 };
 
 void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
@@ -194,6 +195,28 @@ void LlmWorkbenchTest::reportsConnectionTaskStates() {
     page.findChild<QPushButton*>(QStringLiteral("llmTestConnection"))->click();
     QCOMPARE(indicator.state(), TaskState::Failed);
     QCOMPARE(server.requests.size(), 1);
+}
+
+void LlmWorkbenchTest::placesTaskIndicatorBeforeWorkspaceStatus() {
+    loreforge::app::MainWindow window;
+    window.show();
+    auto* indicator = child<loreforge::app::TaskIndicator>(window, "taskIndicator");
+    auto* status = child<QLabel>(window, "workspaceStatusMessage");
+    auto* tabs = child<QTabWidget>(window, "workspacePages");
+    QTRY_VERIFY(indicator->isVisible());
+    QCOMPARE(status->text(), QStringLiteral("Ready"));
+    QVERIFY(indicator->mapTo(&window, QPoint()).x() < 20);
+    QVERIFY(status->mapTo(&window, QPoint()).x() >=
+            indicator->mapTo(&window, QPoint()).x() + indicator->width());
+    tabs->setCurrentIndex(1);
+    QVERIFY(indicator->isVisible());
+    tabs->setCurrentIndex(2);
+    QVERIFY(indicator->isVisible());
+    const auto task = QUuid::createUuid();
+    indicator->report(task, loreforge::app::TaskState::Local, QStringLiteral("任务"));
+    indicator->report(task, loreforge::app::TaskState::Failed, QStringLiteral("失败"));
+    indicator->acknowledgeFailure();
+    QCOMPARE(status->text(), QStringLiteral("Ready"));
 }
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {

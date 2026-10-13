@@ -12,6 +12,7 @@
 #include <optional>
 
 class QLabel;
+class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QTextBrowser;
@@ -56,6 +57,7 @@ class MainWindow final : public QMainWindow {
     void showLoadError(QString message);
     void reloadRepairQueue();
     void reloadAnalysisHistory();
+    void showStatusMessage(const QString& message, int timeoutMs = 0);
     [[nodiscard]] const document::Document* selectedBook() const;
 
     QTreeWidget* projectExplorer_ = nullptr;
@@ -73,6 +75,8 @@ class MainWindow final : public QMainWindow {
     NovelAnalysisWorkbench* analysisWorkbench_ = nullptr;
     ChapterAnalysisController* analysisController_ = nullptr;
     TaskIndicator* taskIndicator_ = nullptr;
+    QLabel* statusMessage_ = nullptr;
+    QTimer* statusMessageTimer_ = nullptr;
     QUuid analysisTaskId_;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
