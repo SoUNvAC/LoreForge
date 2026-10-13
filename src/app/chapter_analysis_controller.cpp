@@ -99,11 +99,13 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
     }
     if (connection.responseFormat != QStringLiteral("json_object") &&
         connection.responseFormat != QStringLiteral("json_schema")) {
+        emit taskStatus(TaskState::Failed, QStringLiteral("分析必须使用 JSON 格式；未发送。"));
         emit finished(QStringLiteral("分析必须使用 json_object 或 json_schema；未发送。"));
         return;
     }
     auto opened = storage::ProjectDatabase::open(path);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
+        emit taskStatus(TaskState::Failed, QStringLiteral("项目无法打开：") + error->message);
         emit finished(QStringLiteral("项目无法打开：") + error->message);
         return;
     }
@@ -120,6 +122,7 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
         std::get<inference::ContextSnapshot>(storedSource) != preview.snapshot ||
         std::get<inference::PromptVersion>(storedPrompt) != preview.prompt ||
         std::get<inference::OutputSchema>(storedSchema) != preview.schema) {
+        emit taskStatus(TaskState::Failed, QStringLiteral("预览与项目快照不一致；未发送。"));
         emit finished(QStringLiteral("预览与项目中的不可变快照不一致；未发送，请重新准备。"));
         return;
     }
@@ -303,9 +306,15 @@ void ChapterAnalysisController::nextRole() {
     }
     persisted_ = true;
     emit roleChanged(role_, QStringLiteral("运行中"), QStringLiteral("—"), 0);
+    const QStringList roles{QStringLiteral("分析员"), QStringLiteral("复核员"),
+                            QStringLiteral("审查员")};
+    emit taskStatus(
+        TaskState::Waiting,
+        QStringLiteral("%1 · 第 %2 章 · 等待模型响应").arg(roles.at(role_)).arg(chapterIndex_ + 1));
 }
 
 void ChapterAnalysisController::complete(llm::LLMResult result) {
+    emit taskStatus(TaskState::Local, QStringLiteral("正在校验角色响应并保存结果"));
     requestId_ = {};
     QStringList errors;
     QJsonObject parsed;
@@ -428,7 +437,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
                                 : QStringLiteral("用量未知"),
                      *run_.latencyMs);
     if (!errors.isEmpty()) {
-        stop(run_.errorMessage);
+        stop(run_.errorMessage, cancelled_ ? TaskState::Cancelled : TaskState::Failed);
         return;
     }
     if (!busy_ || cancelled_) {
@@ -452,7 +461,9 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
             : (checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
                    ? QStringLiteral("通过（同模型角色检查，非独立验证）")
                    : QStringLiteral("待人工确认"));
-    stop(conclusion);
+    stop(conclusion, checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
+                         ? TaskState::Success
+                         : TaskState::Attention);
 }
 
 void ChapterAnalysisController::cancel() {
@@ -466,9 +477,10 @@ void ChapterAnalysisController::cancel() {
         stop(QStringLiteral("已取消；不会继续后续角色。"));
     }
 }
-void ChapterAnalysisController::stop(QString message) {
+void ChapterAnalysisController::stop(QString message, TaskState state) {
     busy_ = false;
     emit busyChanged(false);
+    emit taskStatus(cancelled_ ? TaskState::Cancelled : state, message);
     emit finished(std::move(message));
 }
 

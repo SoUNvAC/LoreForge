@@ -83,6 +83,8 @@ QString chapterHtml(const document::Chapter& chapter) {
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(tr("LoreForge"));
     resize(1280, 760);
+    taskIndicator_ = new TaskIndicator(this);
+    statusBar()->addPermanentWidget(taskIndicator_);
 
     auto* openAction = new QAction(tr("Open Project..."), this);
     openAction->setObjectName(QStringLiteral("openProjectAction"));
@@ -217,6 +219,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     analysisScroll->setWidget(analysisWorkbench_);
     pages->addTab(analysisScroll, tr("小说分析"));
     analysisController_ = new ChapterAnalysisController(this);
+    connect(llmWorkbench_, &LlmWorkbench::taskStatus, taskIndicator_, &TaskIndicator::report);
+    connect(analysisController_, &ChapterAnalysisController::taskStatus, this,
+            [this](TaskState state, const QString& text) {
+                taskIndicator_->report(analysisTaskId_, state, text);
+            });
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::chapterPreviewRequested, this,
             &MainWindow::prepareChapterPreview);
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::chapterSelected, this, [this](int index) {
@@ -262,6 +269,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     contextDock->setMinimumWidth(360);
     addDockWidget(Qt::RightDockWidgetArea, contextDock);
     viewMenu->addAction(contextDock->toggleViewAction());
+    auto* breathing = viewMenu->addAction(tr("任务灯呼吸动画"));
+    breathing->setObjectName(QStringLiteral("taskBreathingAction"));
+    breathing->setCheckable(true);
+    breathing->setChecked(true);
+    connect(breathing, &QAction::toggled, taskIndicator_, &TaskIndicator::setAnimationEnabled);
 
     repairQueue_ = new RepairQueueWidget(this);
     auto* repairDock = new QDockWidget(tr("Repair Queue"), this);
@@ -312,8 +324,11 @@ void MainWindow::inspectContext(const context::ContextInspectorData& context) {
 }
 
 bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projectPath) {
+    const auto taskId = QUuid::createUuid();
+    taskIndicator_->report(taskId, TaskState::Local, tr("正在导入小说"));
     auto parsed = parser::MarkdownSourceParser::parseDirectory(sourcePath);
-    const auto fail = [this](const QString& message) {
+    const auto fail = [this, taskId](const QString& message) {
+        taskIndicator_->report(taskId, TaskState::Failed, tr("导入失败：%1").arg(message));
         // A failed import leaves the currently opened project usable.
         statusBar()->showMessage(tr("Import failed: %1").arg(message));
         return false;
@@ -372,6 +387,7 @@ bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projec
             .arg(imported.volumeCount)
             .arg(imported.document.chapters.size())
             .arg(imported.excludedPaths.size()));
+    taskIndicator_->report(taskId, TaskState::Success, tr("小说导入完成"));
     return true;
 }
 
@@ -726,10 +742,13 @@ void MainWindow::clearBookView() {
 }
 
 void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
+    const auto taskId = QUuid::createUuid();
+    taskIndicator_->report(taskId, TaskState::Local, tr("正在准备章节预览"));
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || openedDatabasePath_.isEmpty()) {
         analysisWorkbench_->showError(tr("准备失败；未发送。请先打开项目并选择章节。"));
+        taskIndicator_->report(taskId, TaskState::Failed, tr("预览失败：请先选择章节"));
         return;
     }
     auto built = ChapterPreviewBuilder::build(
@@ -738,12 +757,14 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
     if (const auto* error = std::get_if<storage::StorageError>(&built)) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
+        taskIndicator_->report(taskId, TaskState::Failed, tr("预览失败：%1").arg(error->message));
         return;
     }
     auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
+        taskIndicator_->report(taskId, TaskState::Failed, tr("预览失败：%1").arg(error->message));
         return;
     }
     auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
@@ -752,9 +773,11 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
     if (const auto* error = std::get_if<storage::StorageError>(&stored)) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
+        taskIndicator_->report(taskId, TaskState::Failed, tr("预览失败：%1").arg(error->message));
         return;
     }
     analysisWorkbench_->showChapterPreview(std::get<ChapterPreview>(stored));
+    taskIndicator_->report(taskId, TaskState::Success, tr("章节预览准备完成 · 尚未发送"));
 }
 
 void MainWindow::startChapterAnalysis() {
@@ -764,9 +787,12 @@ void MainWindow::startChapterAnalysis() {
         return;
     }
     const auto preview = *analysisWorkbench_->preview();
+    analysisTaskId_ = QUuid::createUuid();
+    taskIndicator_->report(analysisTaskId_, TaskState::Local, tr("正在检查分析请求"));
     const auto connection = llmWorkbench_->analysisConnection();
     if (const auto* error = std::get_if<QString>(&connection)) {
         analysisWorkbench_->showError(*error);
+        taskIndicator_->report(analysisTaskId_, TaskState::Failed, *error);
         return;
     }
     const auto checked = ChapterPreviewBuilder::build(
@@ -777,6 +803,8 @@ void MainWindow::startChapterAnalysis() {
         std::get<ChapterPreview>(checked).snapshot.id != preview.snapshot.id) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("原文或章节已变化；未发送，请重新准备。"));
+        taskIndicator_->report(analysisTaskId_, TaskState::Failed,
+                               tr("原文已变化；未发送，请重新准备"));
         return;
     }
     analysisController_->start(openedDatabasePath_, *book,

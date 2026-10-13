@@ -4,6 +4,7 @@
 #include "chapter_preview.h"
 #include "loreforge/storage/llm_run_repository.h"
 #include "loreforge/storage/project_database.h"
+#include "task_indicator.h"
 
 #include <QObject>
 
@@ -32,11 +33,12 @@ class ChapterAnalysisController final : public QObject {
     void busyChanged(bool busy);
     void roleChanged(int role, QString status, QString usage, qint64 latencyMs);
     void finished(QString status);
+    void taskStatus(TaskState state, QString text);
 
   private:
     void nextRole();
     void complete(llm::LLMResult result);
-    void stop(QString message);
+    void stop(QString message, TaskState state = TaskState::Failed);
     [[nodiscard]] bool sourceUnchanged() const;
     std::unique_ptr<storage::ProjectDatabase> database_;
     std::unique_ptr<llm::QwenClient> client_;

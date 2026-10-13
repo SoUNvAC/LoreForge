@@ -234,6 +234,9 @@ QString LlmWorkbench::configurationError() const {
 void LlmWorkbench::saveConfiguration() {
     if (const auto error = configurationError(); !error.isEmpty()) {
         connection_->setText(error);
+        const auto id = QUuid::createUuid();
+        emit taskStatus(id, TaskState::Local, tr("检查连接配置"));
+        emit taskStatus(id, TaskState::Failed, error);
         return;
     }
     settings_->beginGroup(QStringLiteral("llmWorkbench"));
@@ -266,6 +269,9 @@ void LlmWorkbench::testConnection() {
     }
     if (const auto error = configurationError(); !error.isEmpty()) {
         connection_->setText(error);
+        const auto id = QUuid::createUuid();
+        emit taskStatus(id, TaskState::Local, tr("检查连接配置"));
+        emit taskStatus(id, TaskState::Failed, error);
         return;
     }
     const QUrl endpoint(endpoint_->text().trimmed(), QUrl::StrictMode);
@@ -310,6 +316,7 @@ void LlmWorkbench::testConnection() {
             guard->finishTest(std::move(result));
         }
     });
+    emit taskStatus(requestId_, TaskState::Waiting, tr("连接测试 · 等待模型响应"));
 }
 
 void LlmWorkbench::cancelTest() {
@@ -345,6 +352,7 @@ void LlmWorkbench::resetTokenCounts() {
 }
 
 void LlmWorkbench::finishTest(llm::LLMResult result) {
+    const auto completedId = requestId_;
     requestId_ = {};
     setBusy(false);
     if (const auto* error = std::get_if<llm::LLMError>(&result)) {
@@ -358,6 +366,10 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
         metrics_->setText(tr("本次失败/取消；耗时 %1 ms；token 用量未知，可能已产生消耗。")
                               .arg(error->latencyMs));
         ++missingUsage_;
+        emit taskStatus(completedId,
+                        error->code == llm::LLMErrorCode::Cancelled ? TaskState::Cancelled
+                                                                    : TaskState::Failed,
+                        message);
     } else {
         const auto& response = std::get<llm::LLMResponse>(result);
         const auto format = format_->currentText();
@@ -395,6 +407,8 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
                 tr("耗时 %1 ms · Token：服务未提供；生成速度：未提供。").arg(response.latencyMs));
         }
         log_->appendPlainText(connection_->text());
+        emit taskStatus(completedId, accepted ? TaskState::Success : TaskState::Failed,
+                        connection_->text());
     }
     updateTokenTotals();
 }

@@ -2,6 +2,7 @@
 
 #include "analysis_connection.h"
 #include "loreforge/llm/qwen_client.h"
+#include "task_indicator.h"
 
 #include <QWidget>
 
@@ -29,6 +30,7 @@ class LlmWorkbench final : public QWidget {
 
   signals:
     void configurationChanged();
+    void taskStatus(QUuid id, TaskState state, QString text);
 
   private:
     void saveConfiguration();

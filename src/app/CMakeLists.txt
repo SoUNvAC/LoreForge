@@ -5,6 +5,8 @@ qt_add_library(
     chapter_analysis_controller.cpp
     chapter_analysis_controller.h
     analysis_connection.h
+    task_indicator.cpp
+    task_indicator.h
     novel_analysis_workbench.cpp
     novel_analysis_workbench.h
     document_metrics.cpp

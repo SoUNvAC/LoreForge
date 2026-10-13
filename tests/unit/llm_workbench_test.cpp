@@ -114,7 +114,87 @@ class LlmWorkbenchTest final : public QObject {
     void rejectsUnsafeConfigurationAndRedactsFailures();
     void supportsCancellationAndMissingUsage();
     void resetsTokenCountsOnlyAfterConfirmation();
+    void acknowledgesFailureWithoutChangingTaskHistory();
+    void keepsNewerTasksSafeFromLateCallbacks();
+    void reportsConnectionTaskStates();
 };
+
+void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
+    using namespace loreforge::app;
+    TaskIndicator indicator;
+    auto* lamp = indicator.findChild<QPushButton*>(QStringLiteral("taskStatusLamp"));
+    auto* label = indicator.findChild<QLabel*>(QStringLiteral("taskStatusText"));
+    QCOMPARE(indicator.state(), TaskState::Idle);
+    const auto task = QUuid::createUuid();
+    indicator.report(task, TaskState::Waiting, QStringLiteral("连接测试"));
+    QCOMPARE(indicator.state(), TaskState::Waiting);
+    QVERIFY(!lamp->isEnabled());
+    indicator.report(task, TaskState::Failed, QStringLiteral("HTTP 404"));
+    QVERIFY(lamp->isEnabled());
+    QVERIFY(label->text().contains(QStringLiteral("404")));
+    QVERIFY(lamp->styleSheet().contains(QStringLiteral("#d32f2f")));
+    lamp->click();
+    QCOMPARE(indicator.state(), TaskState::Idle);
+    QCOMPARE(label->text(), QStringLiteral("就绪"));
+    QVERIFY(lamp->styleSheet().contains(QStringLiteral("#808080")));
+    indicator.report(task, TaskState::Failed, QStringLiteral("过时的失败回调"));
+    QCOMPARE(indicator.state(), TaskState::Idle);
+    const auto next = QUuid::createUuid();
+    indicator.report(next, TaskState::Local, QStringLiteral("预览"));
+    indicator.setAnimationEnabled(false);
+    indicator.acknowledgeFailure();
+    QCOMPARE(indicator.state(), TaskState::Local);
+    indicator.report(next, TaskState::Cancelled, QStringLiteral("已取消"));
+    QCOMPARE(indicator.state(), TaskState::Cancelled);
+    QVERIFY(!lamp->isEnabled());
+}
+
+void LlmWorkbenchTest::keepsNewerTasksSafeFromLateCallbacks() {
+    using namespace loreforge::app;
+    TaskIndicator indicator;
+    const auto older = QUuid::createUuid();
+    const auto newer = QUuid::createUuid();
+    indicator.report(older, TaskState::Waiting, QStringLiteral("分析"));
+    indicator.report(newer, TaskState::Local, QStringLiteral("导入"));
+    indicator.report(older, TaskState::Failed, QStringLiteral("旧任务失败"));
+    QCOMPARE(indicator.state(), TaskState::Local);
+    indicator.report(newer, TaskState::Attention, QStringLiteral("待人工确认"));
+    QCOMPARE(indicator.state(), TaskState::Attention);
+    indicator.acknowledgeFailure();
+    QCOMPARE(indicator.state(), TaskState::Attention);
+    const auto background = QUuid::createUuid();
+    const auto foreground = QUuid::createUuid();
+    indicator.report(background, TaskState::Waiting, QStringLiteral("等待响应"));
+    indicator.report(foreground, TaskState::Local, QStringLiteral("准备预览"));
+    indicator.report(foreground, TaskState::Success, QStringLiteral("预览完成"));
+    QCOMPARE(indicator.state(), TaskState::Waiting);
+    indicator.report(background, TaskState::Success, QStringLiteral("分析完成"));
+    QCOMPARE(indicator.state(), TaskState::Success);
+}
+
+void LlmWorkbenchTest::reportsConnectionTaskStates() {
+    using namespace loreforge::app;
+    QTemporaryDir dir;
+    ProbeServer server;
+    server.status = 404;
+    LlmWorkbench page(nullptr, dir.filePath(QStringLiteral("settings.ini")));
+    TaskIndicator indicator;
+    connect(&page, &LlmWorkbench::taskStatus, &indicator, &TaskIndicator::report);
+    configure(page, server.endpoint());
+    page.findChild<QPushButton*>(QStringLiteral("llmTestConnection"))->click();
+    QCOMPARE(indicator.state(), TaskState::Waiting);
+    QTRY_COMPARE(indicator.state(), TaskState::Failed);
+    const auto log = page.findChild<QPlainTextEdit*>(QStringLiteral("llmConnectionLog"));
+    const auto before = log->toPlainText();
+    indicator.acknowledgeFailure();
+    QCOMPARE(indicator.state(), TaskState::Idle);
+    QCOMPARE(log->toPlainText(), before);
+    QCOMPARE(server.requests.size(), 1);
+    configure(page, QStringLiteral("not-a-url"));
+    page.findChild<QPushButton*>(QStringLiteral("llmTestConnection"))->click();
+    QCOMPARE(indicator.state(), TaskState::Failed);
+    QCOMPARE(server.requests.size(), 1);
+}
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
     loreforge::app::MainWindow window;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "project_workspace.h"
+#include <QUuid>
 
 #include "loreforge/context/context_types.h"
 #include "loreforge/proofreading/repair_queue.h"
@@ -22,6 +23,7 @@ class RepairQueueWidget;
 class LlmWorkbench;
 class NovelAnalysisWorkbench;
 class ChapterAnalysisController;
+class TaskIndicator;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -70,6 +72,8 @@ class MainWindow final : public QMainWindow {
     LlmWorkbench* llmWorkbench_ = nullptr;
     NovelAnalysisWorkbench* analysisWorkbench_ = nullptr;
     ChapterAnalysisController* analysisController_ = nullptr;
+    TaskIndicator* taskIndicator_ = nullptr;
+    QUuid analysisTaskId_;
     std::optional<StoredWorkspace> workspace_;
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;
