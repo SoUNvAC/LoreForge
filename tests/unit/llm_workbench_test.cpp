@@ -118,6 +118,7 @@ class LlmWorkbenchTest final : public QObject {
     void keepsNewerTasksSafeFromLateCallbacks();
     void reportsConnectionTaskStates();
     void placesTaskIndicatorBeforeWorkspaceStatus();
+    void displaysInvalidResponseDiagnosticsAndCountsKnownUsage();
 };
 
 void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
@@ -217,6 +218,27 @@ void LlmWorkbenchTest::placesTaskIndicatorBeforeWorkspaceStatus() {
     indicator->report(task, loreforge::app::TaskState::Failed, QStringLiteral("失败"));
     indicator->acknowledgeFailure();
     QCOMPARE(status->text(), QStringLiteral("Ready"));
+}
+
+void LlmWorkbenchTest::displaysInvalidResponseDiagnosticsAndCountsKnownUsage() {
+    QTemporaryDir directory;
+    ProbeServer server;
+    server.body =
+        R"({"choices":[{"message":{"content":"","reasoning_content":"private-thinking"},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}})";
+    loreforge::app::LlmWorkbench page(nullptr, directory.filePath(QStringLiteral("settings.ini")));
+    configure(page, server.endpoint());
+    child<QComboBox>(page, "llmResponseFormat")->setCurrentText(QStringLiteral("json_object"));
+    child<QPushButton>(page, "llmTestConnection")->click();
+    QTRY_VERIFY(child<QPushButton>(page, "llmTestConnection")->isEnabled());
+    QVERIFY(
+        child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("正文为空")));
+    QVERIFY(child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("length")));
+    QVERIFY(child<QLabel>(page, "llmTestTotals")->text().contains(QStringLiteral("总计 4106")));
+    QVERIFY(child<QLabel>(page, "llmTestTotals")->text().contains(QStringLiteral("0 次用量未知")));
+    QVERIFY(!child<QPlainTextEdit>(page, "llmConnectionLog")
+                 ->toPlainText()
+                 .contains(QStringLiteral("private-thinking")));
+    QCOMPARE(server.requests.size(), 1);
 }
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {

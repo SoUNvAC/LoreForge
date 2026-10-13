@@ -12,6 +12,30 @@
 
 namespace loreforge::app {
 namespace {
+QByteArray withoutReasoning(const QByteArray& raw) {
+    auto object = QJsonDocument::fromJson(raw).object();
+    auto choices = object.value(QStringLiteral("choices")).toArray();
+    bool changed = false;
+    for (qsizetype index = 0; index < choices.size(); ++index) {
+        auto choice = choices[index].toObject();
+        auto message = choice.value(QStringLiteral("message")).toObject();
+        const QStringList fields{QStringLiteral("reasoning_content"), QStringLiteral("reasoning"),
+                                 QStringLiteral("thinking"), QStringLiteral("reasoning_details")};
+        for (const auto& field : fields) {
+            if (message.contains(field)) {
+                changed = true;
+                message.remove(field);
+            }
+        }
+        choice.insert(QStringLiteral("message"), message);
+        choices[index] = choice;
+    }
+    if (!changed)
+        return raw;
+    object.insert(QStringLiteral("choices"), choices);
+    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+}
+
 QJsonObject reviewSchema() {
     const QJsonObject issue{
         {QStringLiteral("type"), QStringLiteral("object")},
@@ -321,6 +345,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     std::optional<QJsonDocument> parsedDocument;
     std::optional<QByteArray> raw;
     bool usageKnown = false;
+    QJsonObject responseDiagnostics;
     auto schemaReport = inference::ValidationReport{inference::ValidationStatus::Unavailable, {}};
     if (const auto* error = std::get_if<llm::LLMError>(&result)) {
         run_.attemptCount = error->attemptCount;
@@ -329,6 +354,16 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         errors.append(QStringLiteral("请求失败/取消：%1，HTTP %2")
                           .arg(run_.errorCode)
                           .arg(error->httpStatus));
+        responseDiagnostics = llm::responseDiagnosticsJson(error->diagnostics);
+        if (!responseDiagnostics.isEmpty()) {
+            errors.append(llm::responseDiagnosticSummary(error->diagnostics));
+            usageKnown = error->diagnostics.usageReported;
+            if (usageKnown) {
+                run_.promptTokens = error->diagnostics.usage.promptTokens;
+                run_.completionTokens = error->diagnostics.usage.completionTokens;
+                run_.totalTokens = error->diagnostics.usage.totalTokens;
+            }
+        }
         // Provider error bodies may reflect credentials: never store them.
     } else {
         const auto& response = std::get<llm::LLMResponse>(result);
@@ -346,7 +381,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
              response.content.contains(QString::fromUtf8(connection_.options.apiKey)))) {
             errors.append(QStringLiteral("响应包含凭据，已拒绝保存和显示。"));
         } else {
-            raw = response.rawResponse;
+            raw = withoutReasoning(response.rawResponse);
             parsed = response.structuredContent.toObject();
             parsedDocument = QJsonDocument(parsed);
             schemaReport = inference::OutputValidator::validate(rolePreview_.schema.schema, parsed);
@@ -407,6 +442,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
          source_.snapshot.content.value(QStringLiteral("chapter_id"))},
         {QStringLiteral("role_index"), role_},
         {QStringLiteral("usage_known"), usageKnown},
+        {QStringLiteral("response_diagnostics"), responseDiagnostics},
         {QStringLiteral("domain_errors"), domainErrors},
         {QStringLiteral("verdict"), parsed.value(QStringLiteral("verdict"))}};
     storage::LLMRunRepository runs(*database_);

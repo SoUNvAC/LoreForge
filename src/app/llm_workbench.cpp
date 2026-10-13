@@ -356,16 +356,31 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
     requestId_ = {};
     setBusy(false);
     if (const auto* error = std::get_if<llm::LLMError>(&result)) {
-        const auto message = error->code == llm::LLMErrorCode::Cancelled
-                                 ? tr("已取消；服务端可能仍在计算。")
-                                 : tr("测试失败：%1，HTTP %2。检查地址、鉴权、参数和服务状态。")
-                                       .arg(llm::errorCodeName(error->code))
-                                       .arg(error->httpStatus);
+        auto message = error->code == llm::LLMErrorCode::Cancelled
+                           ? tr("已取消；服务端可能仍在计算。")
+                           : tr("测试失败：%1，HTTP %2。检查地址、鉴权、参数和服务状态。")
+                                 .arg(llm::errorCodeName(error->code))
+                                 .arg(error->httpStatus);
+        const auto diagnostic = llm::responseDiagnosticSummary(error->diagnostics);
+        if (!diagnostic.isEmpty())
+            message += QLatin1Char('\n') + diagnostic;
         connection_->setText(message);
         log_->appendPlainText(message);
-        metrics_->setText(tr("本次失败/取消；耗时 %1 ms；token 用量未知，可能已产生消耗。")
-                              .arg(error->latencyMs));
-        ++missingUsage_;
+        if (error->diagnostics.usageReported) {
+            const auto& usage = error->diagnostics.usage;
+            inputTokens_ += usage.promptTokens;
+            outputTokens_ += usage.completionTokens;
+            metrics_->setText(
+                tr("响应校验失败；耗时 %1 ms · 输入 %2 · 输出 %3 · 总计 %4 token（服务报告）。")
+                    .arg(error->latencyMs)
+                    .arg(usage.promptTokens)
+                    .arg(usage.completionTokens)
+                    .arg(usage.totalTokens));
+        } else {
+            metrics_->setText(tr("本次失败/取消；耗时 %1 ms；token 用量未知，可能已产生消耗。")
+                                  .arg(error->latencyMs));
+            ++missingUsage_;
+        }
         emit taskStatus(completedId,
                         error->code == llm::LLMErrorCode::Cancelled ? TaskState::Cancelled
                                                                     : TaskState::Failed,

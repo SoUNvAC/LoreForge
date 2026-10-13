@@ -8,6 +8,8 @@
 #include <QPointer>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace loreforge::llm {
@@ -69,7 +71,12 @@ std::optional<TokenUsage> tokenUsage(const QJsonValue& value) {
     const auto prompt = usage.value(QStringLiteral("prompt_tokens"));
     const auto completion = usage.value(QStringLiteral("completion_tokens"));
     const auto total = usage.value(QStringLiteral("total_tokens"));
-    if (!prompt.isDouble() || !completion.isDouble() || !total.isDouble()) {
+    const auto validCount = [](const QJsonValue& count) {
+        const auto number = count.toDouble(-1);
+        return count.isDouble() && std::isfinite(number) && number >= 0 &&
+               number <= std::numeric_limits<int>::max() && std::floor(number) == number;
+    };
+    if (!validCount(prompt) || !validCount(completion) || !validCount(total)) {
         return std::nullopt;
     }
     const TokenUsage result{prompt.toInt(-1), completion.toInt(-1), total.toInt(-1)};
@@ -79,22 +86,89 @@ std::optional<TokenUsage> tokenUsage(const QJsonValue& value) {
     return result;
 }
 
-std::optional<QJsonValue> structuredContent(QStringView content) {
-    QJsonParseError parseError;
-    const auto document = QJsonDocument::fromJson(content.toString().toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError) {
-        return std::nullopt;
+} // namespace
+
+QJsonObject responseDiagnosticsJson(const ResponseDiagnostics& value) {
+    if (value.issue == ResponseIssue::None)
+        return {};
+    const QStringList issues{QStringLiteral("none"),
+                             QStringLiteral("envelope_json"),
+                             QStringLiteral("envelope_shape"),
+                             QStringLiteral("missing_content"),
+                             QStringLiteral("content_type"),
+                             QStringLiteral("empty_content"),
+                             QStringLiteral("invalid_usage"),
+                             QStringLiteral("structured_json"),
+                             QStringLiteral("structured_type"),
+                             QStringLiteral("output_limit")};
+    QJsonObject result{{QStringLiteral("issue"), issues.at(static_cast<int>(value.issue))},
+                       {QStringLiteral("finish_reason"), value.finishReason},
+                       {QStringLiteral("response_bytes"), value.responseBytes},
+                       {QStringLiteral("content_bytes"), value.contentBytes},
+                       {QStringLiteral("reasoning_bytes"), value.reasoningBytes},
+                       {QStringLiteral("json_error_offset"), value.jsonErrorOffset},
+                       {QStringLiteral("usage_state"),
+                        value.usageReported ? QStringLiteral("reported")
+                                            : (value.usageInvalid ? QStringLiteral("invalid")
+                                                                  : QStringLiteral("missing"))}};
+    if (value.usageReported) {
+        result.insert(
+            QStringLiteral("usage"),
+            QJsonObject{{QStringLiteral("prompt_tokens"), value.usage.promptTokens},
+                        {QStringLiteral("completion_tokens"), value.usage.completionTokens},
+                        {QStringLiteral("total_tokens"), value.usage.totalTokens}});
     }
-    if (document.isObject()) {
-        return QJsonValue(document.object());
-    }
-    if (document.isArray()) {
-        return QJsonValue(document.array());
-    }
-    return std::nullopt;
+    return result;
 }
 
-} // namespace
+QString responseDiagnosticSummary(const ResponseDiagnostics& value) {
+    if (value.issue == ResponseIssue::None)
+        return {};
+    QString reason;
+    switch (value.issue) {
+    case ResponseIssue::EnvelopeJson:
+        reason = QStringLiteral("响应外层不是合法 JSON");
+        break;
+    case ResponseIssue::EnvelopeShape:
+        reason = QStringLiteral("响应外层结构异常（choices/message）");
+        break;
+    case ResponseIssue::MissingContent:
+        reason = QStringLiteral("响应正文 content 缺失或为 null");
+        break;
+    case ResponseIssue::ContentType:
+        reason = QStringLiteral("响应正文 content 不是字符串");
+        break;
+    case ResponseIssue::EmptyContent:
+        reason = QStringLiteral("响应正文为空");
+        break;
+    case ResponseIssue::InvalidUsage:
+        reason = QStringLiteral("token 用量字段格式异常");
+        break;
+    case ResponseIssue::StructuredJson:
+        reason = QStringLiteral("正文不是合法 JSON（可能截断）");
+        break;
+    case ResponseIssue::StructuredType:
+        reason = QStringLiteral("正文 JSON 顶层不是对象或数组");
+        break;
+    case ResponseIssue::OutputLimit:
+        reason = QStringLiteral("输出未完成，服务报告长度限制");
+        break;
+    case ResponseIssue::None:
+        break;
+    }
+    reason += QStringLiteral("；结束原因 %1；正文 %2 字节；思考 %3 字节")
+                  .arg(value.finishReason)
+                  .arg(value.contentBytes < 0 ? QStringLiteral("未提供")
+                                              : QString::number(value.contentBytes))
+                  .arg(value.reasoningBytes < 0 ? QStringLiteral("未提供")
+                                                : QString::number(value.reasoningBytes));
+    if (value.finishReason == QStringLiteral("length")) {
+        reason += QStringLiteral("；服务报告已达输出/上下文限制，不能视为完整结果");
+    }
+    if (value.jsonErrorOffset >= 0)
+        reason += QStringLiteral("；JSON 错误偏移 %1").arg(value.jsonErrorOffset);
+    return reason;
+}
 
 QString errorCodeName(LLMErrorCode code) {
     switch (code) {
@@ -289,28 +363,70 @@ void QwenClient::handleReplyFinished() {
     const auto document = QJsonDocument::fromJson(payload, &parseError);
     const auto object = document.object();
     const auto choices = object.value(QStringLiteral("choices")).toArray();
-    if (parseError.error != QJsonParseError::NoError || !document.isObject() || choices.isEmpty() ||
-        !choices.first().isObject()) {
-        finishActive(LLMError{LLMErrorCode::InvalidResponse,
-                              QStringLiteral("Qwen returned an invalid response."),
-                              parseError.errorString(), false, httpStatus, active_->attemptCount,
-                              requestTimer_.elapsed(), activePayload_, payload});
-        return;
-    }
-    const auto choice = choices.first().toObject();
-    const auto message = choice.value(QStringLiteral("message")).toObject();
-    const auto contentValue = message.value(QStringLiteral("content"));
+    ResponseDiagnostics diagnostics;
+    diagnostics.responseBytes = payload.size();
+    diagnostics.finishReason = QStringLiteral("missing");
     const auto usage = tokenUsage(object.value(QStringLiteral("usage")));
-    if (!contentValue.isString() || !usage.has_value()) {
+    diagnostics.usageInvalid = !usage.has_value();
+    diagnostics.usageReported =
+        usage.has_value() && object.value(QStringLiteral("usage")).isObject();
+    if (usage)
+        diagnostics.usage = *usage;
+    const auto invalid = [&](ResponseIssue issue) {
+        diagnostics.issue = issue;
         finishActive(LLMError{LLMErrorCode::InvalidResponse,
-                              QStringLiteral("Qwen returned incomplete response data."),
+                              QStringLiteral("The provider response failed validation."),
                               {},
                               false,
                               httpStatus,
                               active_->attemptCount,
                               requestTimer_.elapsed(),
                               activePayload_,
-                              payload});
+                              payload,
+                              diagnostics});
+    };
+    if (parseError.error != QJsonParseError::NoError || !document.isObject() || choices.isEmpty() ||
+        !choices.first().isObject()) {
+        if (parseError.error != QJsonParseError::NoError)
+            diagnostics.jsonErrorOffset = parseError.offset;
+        invalid(parseError.error == QJsonParseError::NoError ? ResponseIssue::EnvelopeShape
+                                                             : ResponseIssue::EnvelopeJson);
+        return;
+    }
+    const auto choice = choices.first().toObject();
+    const auto finish = choice.value(QStringLiteral("finish_reason")).toString();
+    const QStringList allowedFinish{
+        QStringLiteral("stop"),           QStringLiteral("length"),
+        QStringLiteral("content_filter"), QStringLiteral("tool_calls"),
+        QStringLiteral("function_call"),  QStringLiteral("insufficient_system_resource"),
+        QStringLiteral("aborted")};
+    diagnostics.finishReason =
+        allowedFinish.contains(finish)
+            ? finish
+            : (finish.isEmpty() ? QStringLiteral("missing") : QStringLiteral("other"));
+    if (!choice.value(QStringLiteral("message")).isObject()) {
+        invalid(ResponseIssue::EnvelopeShape);
+        return;
+    }
+    const auto message = choice.value(QStringLiteral("message")).toObject();
+    const auto contentValue = message.value(QStringLiteral("content"));
+    if (message.value(QStringLiteral("reasoning_content")).isString()) {
+        diagnostics.reasoningBytes =
+            message.value(QStringLiteral("reasoning_content")).toString().toUtf8().size();
+    }
+    if (contentValue.isString())
+        diagnostics.contentBytes = contentValue.toString().toUtf8().size();
+    if (!contentValue.isString()) {
+        invalid(contentValue.isNull() || contentValue.isUndefined() ? ResponseIssue::MissingContent
+                                                                    : ResponseIssue::ContentType);
+        return;
+    }
+    if (contentValue.toString().trimmed().isEmpty()) {
+        invalid(ResponseIssue::EmptyContent);
+        return;
+    }
+    if (!usage.has_value()) {
+        invalid(ResponseIssue::InvalidUsage);
         return;
     }
 
@@ -318,20 +434,30 @@ void QwenClient::handleReplyFinished() {
     const auto formatType =
         active_->request.responseFormat.value(QStringLiteral("type")).toString();
     if (!formatType.isEmpty() && formatType != QStringLiteral("text")) {
-        const auto structured = structuredContent(contentValue.toString());
-        if (!structured.has_value()) {
-            finishActive(LLMError{LLMErrorCode::InvalidResponse,
-                                  QStringLiteral("Qwen returned invalid structured JSON."),
-                                  {},
-                                  false,
-                                  httpStatus,
-                                  active_->attemptCount,
-                                  requestTimer_.elapsed(),
-                                  activePayload_,
-                                  payload});
+        QJsonParseError contentError;
+        const auto structured =
+            QJsonDocument::fromJson(contentValue.toString().toUtf8(), &contentError);
+        if (contentError.error != QJsonParseError::NoError) {
+            const auto scalar =
+                QJsonDocument::fromJson(QByteArray("[") + contentValue.toString().toUtf8() + "]");
+            if (scalar.isArray() && scalar.array().size() == 1) {
+                invalid(ResponseIssue::StructuredType);
+                return;
+            }
+            diagnostics.jsonErrorOffset = contentError.offset;
+            invalid(ResponseIssue::StructuredJson);
             return;
         }
-        parsedContent = *structured;
+        if (!structured.isObject() && !structured.isArray()) {
+            invalid(ResponseIssue::StructuredType);
+            return;
+        }
+        parsedContent = structured.isObject() ? QJsonValue(structured.object())
+                                              : QJsonValue(structured.array());
+        if (finish == QStringLiteral("length")) {
+            invalid(ResponseIssue::OutputLimit);
+            return;
+        }
     }
 
     finishActive(

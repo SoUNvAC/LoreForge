@@ -79,6 +79,33 @@ enum class LLMErrorCode {
     InvalidResponse,
 };
 
+// Only fixed classifications and numeric metadata: never provider text or reasoning.
+enum class ResponseIssue {
+    None,
+    EnvelopeJson,
+    EnvelopeShape,
+    MissingContent,
+    ContentType,
+    EmptyContent,
+    InvalidUsage,
+    StructuredJson,
+    StructuredType,
+    OutputLimit
+};
+
+struct ResponseDiagnostics final {
+    ResponseIssue issue = ResponseIssue::None;
+    QString finishReason;
+    qint64 responseBytes = 0;
+    qint64 contentBytes = -1;
+    qint64 reasoningBytes = -1;
+    qint64 jsonErrorOffset = -1;
+    TokenUsage usage;
+    bool usageReported = false;
+    bool usageInvalid = false;
+    friend bool operator==(const ResponseDiagnostics&, const ResponseDiagnostics&) = default;
+};
+
 struct LLMError final {
     LLMErrorCode code = LLMErrorCode::InvalidRequest;
     QString message;
@@ -90,6 +117,8 @@ struct LLMError final {
     QByteArray rawRequest;
     QByteArray rawResponse;
 
+    ResponseDiagnostics diagnostics = {};
+
     friend bool operator==(const LLMError&, const LLMError&) = default;
 };
 
@@ -97,5 +126,7 @@ using LLMResult = std::variant<LLMResponse, LLMError>;
 using CompletionHandler = std::function<void(const QUuid&, LLMResult)>;
 
 [[nodiscard]] QString errorCodeName(LLMErrorCode code);
+[[nodiscard]] QString responseDiagnosticSummary(const ResponseDiagnostics& diagnostics);
+[[nodiscard]] QJsonObject responseDiagnosticsJson(const ResponseDiagnostics& diagnostics);
 
 } // namespace loreforge::llm

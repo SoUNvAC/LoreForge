@@ -168,8 +168,19 @@ class Server final : public QObject {
                                                     {QStringLiteral("completion_tokens"), 4},
                                                     {QStringLiteral("total_tokens"), 14}});
                     }
+                    if (withReasoning) {
+                        auto choices = response.value(QStringLiteral("choices")).toArray();
+                        auto choice = choices[0].toObject();
+                        auto message = choice.value(QStringLiteral("message")).toObject();
+                        message.insert(QStringLiteral("reasoning_content"),
+                                       QStringLiteral("private-thinking-must-not-persist"));
+                        choice.insert(QStringLiteral("message"), message);
+                        choices[0] = choice;
+                        response.insert(QStringLiteral("choices"), choices);
+                    }
                     const auto body =
-                        status == 200
+                        !responseOverride.isNull() ? responseOverride
+                        : status == 200
                             ? QJsonDocument(response).toJson(QJsonDocument::Compact)
                             : QByteArray(
                                   "{\"error\":{\"message\":\"credential-must-not-persist\"}}");
@@ -205,6 +216,8 @@ class Server final : public QObject {
     std::function<QJsonObject(const QJsonObject&, int)> makeOutput;
     bool respond = true;
     bool withUsage = true;
+    bool withReasoning = false;
+    QByteArray responseOverride;
     int status = 200;
     QString finishReason = QStringLiteral("stop");
 };
@@ -233,7 +246,60 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesTamperedSnapshots();
     void locatesRepeatedEvidenceByByteRange();
     void closingTheWindowCancelsThePendingRun();
+    void persistsSafeDiagnosticsAndKnownUsageForInvalidResponses();
+    void doesNotStoreReasoningInSuccessfulArtifacts();
 };
+
+void ChapterAnalysisPipelineTest::persistsSafeDiagnosticsAndKnownUsageForInvalidResponses() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.responseOverride =
+        R"({"choices":[{"message":{"content":"","reasoning_content":"credential-must-not-persist private thinking"},"finish_reason":"length"}],"usage":{"prompt_tokens":23,"completion_tokens":4096,"total_tokens":4119}})";
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QVERIFY(finished[0][0].toString().contains(QStringLiteral("正文为空")));
+    QVERIFY(finished[0][0].toString().contains(QStringLiteral("length")));
+    QCOMPARE(server.requests.size(), 1);
+    auto entries = history(fixture);
+    QCOMPARE(entries.size(), 1);
+    const auto& entry = entries[0];
+    QCOMPARE(entry.run.status, storage::LLMRunStatus::Failed);
+    QCOMPARE(entry.run.totalTokens, 4119);
+    QVERIFY(entry.outcome.value(QStringLiteral("usage_known")).toBool());
+    const auto diagnostic = entry.outcome.value(QStringLiteral("response_diagnostics")).toObject();
+    QCOMPARE(diagnostic.value(QStringLiteral("issue")).toString(), QStringLiteral("empty_content"));
+    QCOMPARE(diagnostic.value(QStringLiteral("content_bytes")).toInteger(), 0);
+    QCOMPARE(diagnostic.value(QStringLiteral("finish_reason")).toString(),
+             QStringLiteral("length"));
+    QVERIFY(!entry.artifacts.rawResponse.has_value());
+    QVERIFY(!entry.artifacts.parsedResponse.has_value());
+    QVERIFY(!QJsonDocument(entry.outcome).toJson().contains("credential-must-not-persist"));
+    QVERIFY(!entry.run.errorMessage.contains(QStringLiteral("private thinking")));
+    entries = history(fixture);
+    QCOMPARE(entries[0].run.totalTokens, 4119);
+}
+
+void ChapterAnalysisPipelineTest::doesNotStoreReasoningInSuccessfulArtifacts() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.withReasoning = true;
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    const auto entries = history(fixture);
+    QCOMPARE(entries.size(), 3);
+    for (const auto& entry : entries) {
+        QCOMPARE(entry.run.status, storage::LLMRunStatus::Succeeded);
+        QVERIFY(entry.artifacts.rawResponse.has_value());
+        QVERIFY(!entry.artifacts.rawResponse->contains("private-thinking-must-not-persist"));
+        QVERIFY(!entry.artifacts.rawResponse->contains("reasoning_content"));
+    }
+}
 
 void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
     Fixture fixture;

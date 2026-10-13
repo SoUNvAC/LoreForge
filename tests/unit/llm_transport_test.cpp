@@ -176,7 +176,87 @@ class LLMTransportTest final : public QObject {
     void cancelsActiveAndQueuedRequests();
     void requiresExplicitUnauthenticatedConfiguration();
     void doesNotFollowRedirects();
+    void reportsSafeResponseDiagnostics_data();
+    void reportsSafeResponseDiagnostics();
 };
+
+void LLMTransportTest::reportsSafeResponseDiagnostics_data() {
+    using loreforge::llm::ResponseIssue;
+    QTest::addColumn<QByteArray>("body");
+    QTest::addColumn<int>("issue");
+    QTest::addColumn<bool>("usageKnown");
+    QTest::addColumn<QString>("finish");
+    const auto row = [](const char* name, const QJsonValue& content, ResponseIssue issue,
+                        const QString& finish = u"stop"_s, int usageMode = 0) {
+        auto object = QJsonDocument::fromJson(successResponse(u"{}"_s)).object();
+        QJsonObject message{{u"reasoning_content"_s, u"fixture-secret hidden thinking"_s}};
+        if (!content.isUndefined())
+            message.insert(u"content"_s, content);
+        object.insert(u"choices"_s, QJsonArray{QJsonObject{{u"message"_s, message},
+                                                           {u"finish_reason"_s, finish}}});
+        if (usageMode == 1)
+            object.remove(u"usage"_s);
+        if (usageMode == 2)
+            object.insert(u"usage"_s, QJsonObject{{u"prompt_tokens"_s, 1.5},
+                                                  {u"completion_tokens"_s, 3},
+                                                  {u"total_tokens"_s, 5}});
+        QTest::newRow(name) << QJsonDocument(object).toJson(QJsonDocument::Compact)
+                            << static_cast<int>(issue) << (usageMode == 0)
+                            << (finish == u"fixture-secret"_s ? u"other"_s : finish);
+    };
+    QTest::newRow("bad-envelope-json")
+        << QByteArray("<html>fixture-secret</html>")
+        << static_cast<int>(ResponseIssue::EnvelopeJson) << false << u"missing"_s;
+    QTest::newRow("missing-choices")
+        << QByteArray("{}") << static_cast<int>(ResponseIssue::EnvelopeShape) << false
+        << u"missing"_s;
+    row("missing-content", QJsonValue(QJsonValue::Undefined), ResponseIssue::MissingContent);
+    row("null-content", QJsonValue(QJsonValue::Null), ResponseIssue::MissingContent);
+    row("array-content", QJsonArray{}, ResponseIssue::ContentType);
+    row("empty-content", u""_s, ResponseIssue::EmptyContent);
+    row("empty-length", u""_s, ResponseIssue::EmptyContent, u"length"_s);
+    row("whitespace", u" \n"_s, ResponseIssue::EmptyContent);
+    row("truncated-json", u"{\"value\":"_s, ResponseIssue::StructuredJson, u"length"_s);
+    row("scalar-json", u"true"_s, ResponseIssue::StructuredType);
+    row("missing-usage", u"invalid json"_s, ResponseIssue::StructuredJson, u"stop"_s, 1);
+    row("invalid-usage", u"{}"_s, ResponseIssue::InvalidUsage, u"stop"_s, 2);
+    row("complete-json-length", u"{}"_s, ResponseIssue::OutputLimit, u"length"_s);
+    row("reflected-finish", u"invalid json"_s, ResponseIssue::StructuredJson, u"fixture-secret"_s);
+}
+
+void LLMTransportTest::reportsSafeResponseDiagnostics() {
+    QFETCH(QByteArray, body);
+    QFETCH(int, issue);
+    QFETCH(bool, usageKnown);
+    QFETCH(QString, finish);
+    ScriptedHttpServer server;
+    server.enqueue({200, body});
+    auto client = makeClient(server);
+    auto input = request();
+    input.responseFormat = {{u"type"_s, u"json_object"_s}};
+    std::optional<loreforge::llm::LLMResult> result;
+    const auto id = client.enqueue(
+        input, [&](const QUuid&, loreforge::llm::LLMResult value) { result = std::move(value); });
+    QVERIFY(!id.isNull());
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMError>(*result));
+    const auto error = std::get<loreforge::llm::LLMError>(*result);
+    QCOMPARE(error.code, loreforge::llm::LLMErrorCode::InvalidResponse);
+    QCOMPARE(error.httpStatus, 200);
+    QCOMPARE(static_cast<int>(error.diagnostics.issue), issue);
+    QCOMPARE(error.diagnostics.usageReported, usageKnown);
+    QCOMPARE(error.diagnostics.finishReason, finish);
+    if (usageKnown)
+        QCOMPARE(error.diagnostics.usage.totalTokens, 7);
+    const auto safe =
+        QJsonDocument(loreforge::llm::responseDiagnosticsJson(error.diagnostics)).toJson();
+    QVERIFY(!safe.contains("fixture-secret"));
+    QVERIFY(!safe.contains("hidden thinking"));
+    const auto summary = loreforge::llm::responseDiagnosticSummary(error.diagnostics);
+    QVERIFY(!summary.contains(u"fixture-secret"_s));
+    QVERIFY(!summary.isEmpty());
+    QCOMPARE(server.requestCount(), 1);
+}
 
 void LLMTransportTest::mockAndQwenUseTheSameInterface() {
     static_assert(std::is_base_of_v<loreforge::llm::ILLMClient, loreforge::llm::QwenClient>);
