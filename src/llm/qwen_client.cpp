@@ -27,7 +27,8 @@ QString roleName(LLMRole role) {
     return {};
 }
 
-QByteArray requestPayload(const LLMRequest& request, QStringView model, const QString& tokenField) {
+QByteArray requestPayload(const LLMRequest& request, QStringView model, const QString& tokenField,
+                          std::optional<bool> enableThinking) {
     QJsonArray messages;
     for (const auto& message : request.messages) {
         messages.append(QJsonObject{{QStringLiteral("role"), roleName(message.role)},
@@ -42,6 +43,9 @@ QByteArray requestPayload(const LLMRequest& request, QStringView model, const QS
     }
     if (request.maxCompletionTokens > 0) {
         payload.insert(tokenField, request.maxCompletionTokens);
+    }
+    if (enableThinking.has_value()) {
+        payload.insert(QStringLiteral("enable_thinking"), *enableThinking);
     }
     return QJsonDocument(payload).toJson(QJsonDocument::Compact);
 }
@@ -221,7 +225,8 @@ QByteArray QwenClient::requestBody(const LLMRequest& request) const {
     return requestPayload(request, model,
                           options_.completionTokenParameter == CompletionTokenParameter::MaxTokens
                               ? QStringLiteral("max_tokens")
-                              : QStringLiteral("max_completion_tokens"));
+                              : QStringLiteral("max_completion_tokens"),
+                          options_.enableThinking);
 }
 
 bool QwenClient::cancel(const QUuid& requestId) {

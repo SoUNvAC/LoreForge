@@ -24,6 +24,8 @@ struct QwenClientOptions final {
     bool allowUnauthenticated = false;
     CompletionTokenParameter completionTokenParameter =
         CompletionTokenParameter::MaxCompletionTokens;
+    // Platform-specific extension; absent preserves compatibility/provider defaults.
+    std::optional<bool> enableThinking = std::nullopt;
 
     friend bool operator==(const QwenClientOptions&, const QwenClientOptions&) = default;
 };

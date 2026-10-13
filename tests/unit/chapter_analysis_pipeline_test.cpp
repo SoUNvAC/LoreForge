@@ -307,7 +307,10 @@ void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
     Server server;
     Controller controller;
     QSignalSpy finished(&controller, &Controller::finished);
-    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    auto connection = server.connection();
+    connection.options.enableThinking = false;
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, connection);
+    connection.options.enableThinking = true;
     QVERIFY(controller.busy());
     QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 5000);
     QVERIFY2(finished[0][0].toString().contains(QStringLiteral("通过")),
@@ -319,6 +322,10 @@ void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
         QCOMPARE(entries[index].run.status, storage::LLMRunStatus::Succeeded);
         QCOMPARE(entries[index].artifacts.rawRequest, server.rawRequests[index]);
         QCOMPARE(entries[index].run.totalTokens, 14);
+        QCOMPARE(entries[index].context.content.value(QStringLiteral("thinking_mode")).toString(),
+                 QStringLiteral("disabled"));
+        QVERIFY(server.requests[index].value(QStringLiteral("enable_thinking")).isBool());
+        QVERIFY(!server.requests[index].value(QStringLiteral("enable_thinking")).toBool());
         QVERIFY(entries[index].outcome.value(QStringLiteral("usage_known")).toBool());
         QCOMPARE(entries[index].context.content.value(QStringLiteral("role_index")).toInt(),
                  static_cast<int>(index));

@@ -247,6 +247,11 @@ void ChapterAnalysisController::nextRole() {
     content.insert(QStringLiteral("role_index"), role_);
     content.insert(QStringLiteral("model"), connection_.options.defaultModel);
     content.insert(QStringLiteral("response_format"), connection_.responseFormat);
+    content.insert(QStringLiteral("thinking_mode"),
+                   !connection_.options.enableThinking.has_value()
+                       ? QStringLiteral("follow_provider")
+                       : (*connection_.options.enableThinking ? QStringLiteral("enabled")
+                                                              : QStringLiteral("disabled")));
     content.insert(QStringLiteral("prompt_template_id"), rolePreview_.prompt.prompt.id.toString());
     content.insert(QStringLiteral("prompt_version"), rolePreview_.prompt.version);
     content.insert(QStringLiteral("prompt_sha256"), rolePreview_.prompt.contentHash.toHex());

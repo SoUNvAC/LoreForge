@@ -86,6 +86,13 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     tokenField_ = new QComboBox(advancedBody);
     tokenField_->setObjectName(QStringLiteral("llmTokenField"));
     tokenField_->addItems({QStringLiteral("max_completion_tokens"), QStringLiteral("max_tokens")});
+    thinkingMode_ = new QComboBox(advancedBody);
+    thinkingMode_->setObjectName(QStringLiteral("llmThinkingMode"));
+    thinkingMode_->addItem(tr("跟随服务端（不传参数）"), -1);
+    thinkingMode_->addItem(tr("关闭思考（enable_thinking=false）"), 0);
+    thinkingMode_->addItem(tr("开启思考（enable_thinking=true）"), 1);
+    thinkingMode_->setToolTip(tr("仅适用于支持 enable_thinking "
+                                 "的服务。影响连接测试及全部分析角色；不支持时请选择跟随服务端。"));
     timeout_ = new QSpinBox(advancedBody);
     timeout_->setRange(5, 600);
     timeout_->setSuffix(tr(" 秒"));
@@ -93,6 +100,7 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     outputBudget_->setRange(32, 8192);
     options->addRow(tr("测试输出模式"), format_);
     options->addRow(tr("输出限制字段"), tokenField_);
+    options->addRow(tr("思考模式"), thinkingMode_);
     options->addRow(tr("单次超时"), timeout_);
     options->addRow(tr("测试输出 token 上限"), outputBudget_);
     advancedBody->hide();
@@ -151,6 +159,8 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     tokenField_->setCurrentText(
         settings_->value(key("tokenField"), QStringLiteral("max_completion_tokens")).toString());
     timeout_->setValue(settings_->value(key("timeoutSeconds"), 120).toInt());
+    thinkingMode_->setCurrentIndex(
+        qMax(0, thinkingMode_->findData(settings_->value(key("thinkingMode"), -1).toInt())));
     outputBudget_->setValue(settings_->value(key("outputBudget"), 128).toInt());
     // Plain HTTP permission is session-only, like the secret.
     connect(save_, &QPushButton::clicked, this, &LlmWorkbench::saveConfiguration);
@@ -167,6 +177,7 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     connect(modelSize_, &QComboBox::currentTextChanged, this, changed);
     connect(format_, &QComboBox::currentTextChanged, this, changed);
     connect(tokenField_, &QComboBox::currentTextChanged, this, changed);
+    connect(thinkingMode_, &QComboBox::currentIndexChanged, this, changed);
     connect(allowHttp_, &QCheckBox::toggled, this, changed);
     connect(timeout_, &QSpinBox::valueChanged, this, changed);
     connect(outputBudget_, &QSpinBox::valueChanged, this, changed);
@@ -192,7 +203,8 @@ std::variant<AnalysisConnection, QString> LlmWorkbench::analysisConnection() con
                                modelId_->text().trimmed(), privateHost(endpoint),
                                tokenField_->currentText() == QStringLiteral("max_tokens")
                                    ? llm::CompletionTokenParameter::MaxTokens
-                                   : llm::CompletionTokenParameter::MaxCompletionTokens},
+                                   : llm::CompletionTokenParameter::MaxCompletionTokens,
+                               enableThinking()},
                               format_->currentText(),
                               timeout_->value() * 1000};
 }
@@ -200,6 +212,13 @@ std::variant<AnalysisConnection, QString> LlmWorkbench::analysisConnection() con
 void LlmWorkbench::setAnalysisBusy(bool busy) {
     analysisBusy_ = busy;
     setBusy(!requestId_.isNull());
+}
+
+std::optional<bool> LlmWorkbench::enableThinking() const {
+    const auto mode = thinkingMode_->currentData().toInt();
+    if (mode < 0)
+        return std::nullopt;
+    return mode == 1;
 }
 
 void LlmWorkbench::showAnalysisMetrics(QString message) {
@@ -245,6 +264,7 @@ void LlmWorkbench::saveConfiguration() {
     settings_->setValue(QStringLiteral("modelSize"), modelSize_->currentText());
     settings_->setValue(QStringLiteral("format"), format_->currentText());
     settings_->setValue(QStringLiteral("tokenField"), tokenField_->currentText());
+    settings_->setValue(QStringLiteral("thinkingMode"), thinkingMode_->currentData().toInt());
     settings_->setValue(QStringLiteral("timeoutSeconds"), timeout_->value());
     settings_->setValue(QStringLiteral("outputBudget"), outputBudget_->value());
     settings_->endGroup();
@@ -257,7 +277,7 @@ void LlmWorkbench::saveConfiguration() {
 void LlmWorkbench::setBusy(bool busy) {
     for (auto* widget :
          QList<QWidget*>{endpoint_, modelSize_, modelId_, apiKey_, allowHttp_, format_, tokenField_,
-                         timeout_, outputBudget_, save_, test_, resetTokens_}) {
+                         thinkingMode_, timeout_, outputBudget_, save_, test_, resetTokens_}) {
         widget->setEnabled(!busy && !analysisBusy_);
     }
     cancel_->setEnabled(busy);
@@ -280,7 +300,8 @@ void LlmWorkbench::testConnection() {
                                modelId_->text().trimmed(), privateHost(endpoint),
                                tokenField_->currentText() == QStringLiteral("max_tokens")
                                    ? llm::CompletionTokenParameter::MaxTokens
-                                   : llm::CompletionTokenParameter::MaxCompletionTokens});
+                                   : llm::CompletionTokenParameter::MaxCompletionTokens,
+                               enableThinking()});
     llm::LLMRequest request;
     request.messages = {
         {llm::LLMRole::System, QStringLiteral("This is a synthetic connection test. Return only "

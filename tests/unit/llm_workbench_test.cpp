@@ -119,6 +119,7 @@ class LlmWorkbenchTest final : public QObject {
     void reportsConnectionTaskStates();
     void placesTaskIndicatorBeforeWorkspaceStatus();
     void displaysInvalidResponseDiagnosticsAndCountsKnownUsage();
+    void appliesAndPersistsThinkingMode();
 };
 
 void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
@@ -239,6 +240,45 @@ void LlmWorkbenchTest::displaysInvalidResponseDiagnosticsAndCountsKnownUsage() {
                  ->toPlainText()
                  .contains(QStringLiteral("private-thinking")));
     QCOMPARE(server.requests.size(), 1);
+}
+
+void LlmWorkbenchTest::appliesAndPersistsThinkingMode() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("thinking.ini"));
+    ProbeServer server;
+    loreforge::app::LlmWorkbench page(nullptr, path);
+    configure(page, server.endpoint());
+    auto* mode = child<QComboBox>(page, "llmThinkingMode");
+    auto* test = child<QPushButton>(page, "llmTestConnection");
+    QCOMPARE(mode->currentData().toInt(), -1);
+    for (int value : {-1, 0, 1}) {
+        mode->setCurrentIndex(mode->findData(value));
+        const auto count = server.requests.size();
+        test->click();
+        QVERIFY(!mode->isEnabled());
+        QTRY_VERIFY(test->isEnabled());
+        QCOMPARE(server.requests.size(), count + 1);
+        const auto raw = server.requests.last();
+        const auto payload = QJsonDocument::fromJson(raw.mid(raw.indexOf("\r\n\r\n") + 4)).object();
+        if (value < 0) {
+            QVERIFY(!payload.contains(QStringLiteral("enable_thinking")));
+        } else {
+            QVERIFY(payload.value(QStringLiteral("enable_thinking")).isBool());
+            QCOMPARE(payload.value(QStringLiteral("enable_thinking")).toBool(), value == 1);
+        }
+    }
+    mode->setCurrentIndex(mode->findData(0));
+    child<QPushButton>(page, "llmSaveConfiguration")->click();
+    loreforge::app::LlmWorkbench restored(nullptr, path);
+    QCOMPARE(child<QComboBox>(restored, "llmThinkingMode")->currentData().toInt(), 0);
+    configure(restored, server.endpoint());
+    child<QComboBox>(restored, "llmResponseFormat")->setCurrentText(QStringLiteral("json_object"));
+    const auto configuration = restored.analysisConnection();
+    QVERIFY(std::holds_alternative<loreforge::app::AnalysisConnection>(configuration));
+    const auto thinking =
+        std::get<loreforge::app::AnalysisConnection>(configuration).options.enableThinking;
+    QVERIFY(thinking.has_value());
+    QVERIFY(!*thinking);
 }
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {

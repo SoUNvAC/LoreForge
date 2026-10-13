@@ -51,6 +51,8 @@ class LlmWorkbench final : public QWidget {
     QCheckBox* allowHttp_ = nullptr;
     QComboBox* format_ = nullptr;
     QComboBox* tokenField_ = nullptr;
+    QComboBox* thinkingMode_ = nullptr;
+    [[nodiscard]] std::optional<bool> enableThinking() const;
     QSpinBox* timeout_ = nullptr;
     QSpinBox* outputBudget_ = nullptr;
     QPushButton* save_ = nullptr;
