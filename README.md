@@ -1,5 +1,9 @@
 # LoreForge
 
+日常分析：打开 `.loreforge` 工程 → 选章 → 开始单章分析 → 确认。
+API 地址、模型 ID、临时密钥和预算按工程自动保存/恢复；连接测试与请求预览可选。
+工程文件含明文密钥，请勿上传或分享；分享前应撤销密钥并检查备份。旧工程会自动升级至 schema v7。
+
 LoreForge is a C++20 and Qt 6 desktop application for maintaining, analyzing,
 versioning, and proofreading community-maintained novels.
 

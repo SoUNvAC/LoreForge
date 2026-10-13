@@ -17,6 +17,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -501,18 +502,27 @@ void ChapterAnalysisPipelineTest::requiresConfirmationAndRestoresTheAnalysisPage
     {
         app::MainWindow window;
         QVERIFY(window.openProjectFile(fixture.path));
+        window.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"))->click();
+        QCOMPARE(window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->currentIndex(),
+                 1);
+        QVERIFY(!window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation")));
+        QCOMPARE(server.requests.size(), 0);
         auto* llm = window.findChild<QWidget*>(QStringLiteral("llmWorkbench"));
         llm->findChild<QLineEdit*>(QStringLiteral("llmEndpoint"))
             ->setText(server.connection().options.endpoint.toString());
         llm->findChild<QLineEdit*>(QStringLiteral("llmModelId"))
             ->setText(QStringLiteral("fixture-model"));
+        llm->findChild<QLineEdit*>(QStringLiteral("llmApiKey"))
+            ->setText(QStringLiteral("temporary-pipeline-key"));
+        window.findChild<QSpinBox*>(QStringLiteral("llmChapterContextLimit"))->setValue(65536);
+        window.findChild<QSpinBox*>(QStringLiteral("llmChapterOutputBudget"))->setValue(8192);
         llm->findChild<QCheckBox*>(QStringLiteral("llmAllowHttp"))->setChecked(true);
         llm->findChild<QComboBox*>(QStringLiteral("llmResponseFormat"))
             ->setCurrentText(QStringLiteral("json_object"));
         auto* prepare = window.findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview"));
         auto* analyze = window.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"));
-        QVERIFY(!analyze->isEnabled());
-        prepare->click();
+        QVERIFY(analyze->isEnabled());
+        QVERIFY(prepare->isEnabled());
         QVERIFY(analyze->isEnabled());
         QTimer::singleShot(0, &window, [&window] {
             auto* dialog =
@@ -542,9 +552,9 @@ void ChapterAnalysisPipelineTest::requiresConfirmationAndRestoresTheAnalysisPage
         auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
         selector->setCurrentIndex(1);
         QCOMPARE(window.findChild<QListWidget*>(QStringLiteral("analysisHistory"))->count(), 0);
-        QVERIFY(!analyze->isEnabled());
+        QVERIFY(analyze->isEnabled());
         selector->setCurrentIndex(0);
-        QVERIFY(!analyze->isEnabled());
+        QVERIFY(analyze->isEnabled());
         if (const auto path = qEnvironmentVariable("LOREFORGE_ANALYSIS_PREVIEW_IMAGE");
             !path.isEmpty()) {
             const auto id =
@@ -562,11 +572,17 @@ void ChapterAnalysisPipelineTest::requiresConfirmationAndRestoresTheAnalysisPage
     }
     app::MainWindow reopened;
     QVERIFY(reopened.openProjectFile(fixture.path));
+    QCOMPARE(reopened.findChild<QLineEdit*>(QStringLiteral("llmApiKey"))->text(),
+             QStringLiteral("temporary-pipeline-key"));
+    QCOMPARE(reopened.findChild<QSpinBox*>(QStringLiteral("llmChapterContextLimit"))->value(),
+             65536);
+    QCOMPARE(reopened.findChild<QSpinBox*>(QStringLiteral("llmChapterOutputBudget"))->value(),
+             8192);
     QCOMPARE(reopened.findChild<QListWidget*>(QStringLiteral("analysisHistory"))->count(), 3);
     QVERIFY(reopened.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"))
                 ->text()
                 .contains(QStringLiteral("通过")));
-    QVERIFY(!reopened.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"))->isEnabled());
+    QVERIFY(reopened.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"))->isEnabled());
     QCOMPARE(server.requests.size(), 3);
 }
 

@@ -4,6 +4,7 @@
 #include "loreforge/storage/storage_error.h"
 
 #include <QDateTime>
+#include <QJsonObject>
 #include <QList>
 #include <QString>
 
@@ -26,6 +27,9 @@ class ProjectRepository final {
     [[nodiscard]] StorageStatus create(const ProjectRecord& project);
     [[nodiscard]] StorageResult<ProjectRecord> find(const core::ProjectId& projectId) const;
     [[nodiscard]] StorageResult<QList<ProjectRecord>> list() const;
+    [[nodiscard]] StorageStatus saveApiSettings(const core::ProjectId& projectId,
+                                                const QJsonObject& settings);
+    [[nodiscard]] StorageResult<QJsonObject> apiSettings(const core::ProjectId& projectId) const;
 
   private:
     ProjectDatabase& database_;

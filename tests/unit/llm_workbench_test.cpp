@@ -1,4 +1,6 @@
 #include "llm_workbench.h"
+#include "loreforge/storage/project_database.h"
+#include "loreforge/storage/project_repository.h"
 #include "main_window.h"
 
 #include <QCheckBox>
@@ -13,6 +15,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTcpServer>
@@ -103,13 +107,32 @@ void configure(loreforge::app::LlmWorkbench& page, const QString& endpoint) {
     child<QCheckBox>(page, "llmAllowHttp")->setChecked(true);
     child<QComboBox>(page, "llmResponseFormat")->setCurrentText(QStringLiteral("json_object"));
 }
+bool createProfile(const QString& path, const loreforge::core::ProjectId& id) {
+    auto created = loreforge::storage::ProjectDatabase::create(path);
+    if (!std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created))
+        return false;
+    auto& database = std::get<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created);
+    loreforge::storage::ProjectRepository projects(*database);
+    return !projects.create({id, QStringLiteral("Test profile"), QDateTime::currentDateTimeUtc()})
+                .has_value();
+}
+QJsonObject profile(const QString& path, const loreforge::core::ProjectId& id) {
+    auto opened = loreforge::storage::ProjectDatabase::open(path);
+    if (!std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened))
+        return {};
+    auto& database = std::get<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened);
+    loreforge::storage::ProjectRepository projects(*database);
+    auto result = projects.apiSettings(id);
+    return std::holds_alternative<QJsonObject>(result) ? std::get<QJsonObject>(result)
+                                                       : QJsonObject{};
+}
 } // namespace
 
 class LlmWorkbenchTest final : public QObject {
     Q_OBJECT
   private slots:
     void addsSecondPageWithoutDiscardingReadingState();
-    void savesOnlyNonSecretConfiguration();
+    void savesProjectApiAndTemporaryKey();
     void testsPrivateApiWithoutSendingSource();
     void rejectsUnsafeConfigurationAndRedactsFailures();
     void supportsCancellationAndMissingUsage();
@@ -120,6 +143,7 @@ class LlmWorkbenchTest final : public QObject {
     void placesTaskIndicatorBeforeWorkspaceStatus();
     void displaysInvalidResponseDiagnosticsAndCountsKnownUsage();
     void appliesAndPersistsThinkingMode();
+    void preservesEditsWhenProjectSaveFails();
 };
 
 void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
@@ -244,9 +268,12 @@ void LlmWorkbenchTest::displaysInvalidResponseDiagnosticsAndCountsKnownUsage() {
 
 void LlmWorkbenchTest::appliesAndPersistsThinkingMode() {
     QTemporaryDir directory;
-    const auto path = directory.filePath(QStringLiteral("thinking.ini"));
+    const auto path = directory.filePath(QStringLiteral("thinking.loreforge"));
+    const auto id = loreforge::core::ProjectId::fromStableKey(QStringLiteral("thinking-profile"));
+    QVERIFY(createProfile(path, id));
     ProbeServer server;
     loreforge::app::LlmWorkbench page(nullptr, path);
+    QVERIFY(page.setProject(path, id));
     configure(page, server.endpoint());
     auto* mode = child<QComboBox>(page, "llmThinkingMode");
     auto* test = child<QPushButton>(page, "llmTestConnection");
@@ -270,6 +297,7 @@ void LlmWorkbenchTest::appliesAndPersistsThinkingMode() {
     mode->setCurrentIndex(mode->findData(0));
     child<QPushButton>(page, "llmSaveConfiguration")->click();
     loreforge::app::LlmWorkbench restored(nullptr, path);
+    QVERIFY(restored.setProject(path, id));
     QCOMPARE(child<QComboBox>(restored, "llmThinkingMode")->currentData().toInt(), 0);
     configure(restored, server.endpoint());
     child<QComboBox>(restored, "llmResponseFormat")->setCurrentText(QStringLiteral("json_object"));
@@ -279,6 +307,49 @@ void LlmWorkbenchTest::appliesAndPersistsThinkingMode() {
         std::get<loreforge::app::AnalysisConnection>(configuration).options.enableThinking;
     QVERIFY(thinking.has_value());
     QVERIFY(!*thinking);
+}
+
+void LlmWorkbenchTest::preservesEditsWhenProjectSaveFails() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("failed-save.loreforge"));
+    const auto other = directory.filePath(QStringLiteral("other.loreforge"));
+    const auto id = loreforge::core::ProjectId::fromStableKey(QStringLiteral("save-test"));
+    QVERIFY(createProfile(path, id));
+    QVERIFY(createProfile(other, id));
+    const auto execute = [&](const QString& sql) {
+        const auto name = QUuid::createUuid().toString();
+        bool ok = false;
+        {
+            auto connection = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+            connection.setDatabaseName(path);
+            if (connection.open()) {
+                QSqlQuery query(connection);
+                ok = query.exec(sql);
+            }
+            connection.close();
+        }
+        QSqlDatabase::removeDatabase(name);
+        return ok;
+    };
+    loreforge::app::LlmWorkbench page;
+    QVERIFY(page.setProject(path, id));
+    child<QLineEdit>(page, "llmApiKey")->setText(QStringLiteral("before-fixture-key"));
+    QVERIFY(page.flushConfiguration());
+    QVERIFY(
+        execute(QStringLiteral("CREATE TRIGGER fail_api_save BEFORE INSERT ON project_api_settings "
+                               "BEGIN SELECT RAISE(FAIL, 'fixture'); END")));
+    child<QLineEdit>(page, "llmApiKey")->setText(QStringLiteral("after-fixture-key"));
+    QVERIFY(!page.flushConfiguration());
+    QVERIFY(!page.setProject(other, id));
+    QCOMPARE(child<QLineEdit>(page, "llmApiKey")->text(), QStringLiteral("after-fixture-key"));
+    QCOMPARE(profile(path, id).value(QStringLiteral("api_key")).toString(),
+             QStringLiteral("before-fixture-key"));
+    QVERIFY(execute(QStringLiteral("DROP TRIGGER fail_api_save")));
+    QVERIFY(page.flushConfiguration());
+    QVERIFY(page.setProject(other, id));
+    QVERIFY(child<QLineEdit>(page, "llmApiKey")->text().isEmpty());
+    QCOMPARE(profile(path, id).value(QStringLiteral("api_key")).toString(),
+             QStringLiteral("after-fixture-key"));
 }
 
 void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
@@ -314,28 +385,59 @@ void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
     QVERIFY(!repairs->isHidden());
 }
 
-void LlmWorkbenchTest::savesOnlyNonSecretConfiguration() {
+void LlmWorkbenchTest::savesProjectApiAndTemporaryKey() {
     QTemporaryDir directory;
-    const auto path = directory.filePath(QStringLiteral("settings.ini"));
+    const auto path = directory.filePath(QStringLiteral("profile.loreforge"));
+    const auto otherPath = directory.filePath(QStringLiteral("other.loreforge"));
+    const auto id = loreforge::core::ProjectId::fromStableKey(QStringLiteral("profile-a"));
+    const auto otherId = loreforge::core::ProjectId::fromStableKey(QStringLiteral("profile-b"));
+    QVERIFY(createProfile(path, id));
+    QVERIFY(createProfile(otherPath, otherId));
     {
         loreforge::app::LlmWorkbench page(nullptr, path);
+        QVERIFY(page.setProject(path, id));
         configure(page, QStringLiteral("http://192.168.1.20:8000/v1/chat/completions"));
-        child<QLineEdit>(page, "llmApiKey")->setText(QStringLiteral("secret-not-for-disk"));
-        child<QComboBox>(page, "llmModelSize")->setCurrentText(QStringLiteral("30B"));
+        child<QLineEdit>(page, "llmApiKey")->setText(QStringLiteral("temporary-fixture-key"));
+        QVERIFY(!page.findChild<QComboBox*>(QStringLiteral("llmModelSize")));
+        page.setAnalysisBudgets(65536, 16384);
         child<QPushButton>(page, "llmSaveConfiguration")->click();
-        QVERIFY(
-            child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("已保存")));
+        QVERIFY(child<QLabel>(page, "llmConnectionStatus")
+                    ->text()
+                    .contains(QStringLiteral("已自动保存")));
     }
-    QFile file(path);
-    QVERIFY(file.open(QIODevice::ReadOnly));
-    const auto bytes = file.readAll();
-    QVERIFY(!bytes.contains("secret-not-for-disk"));
-    QVERIFY(!bytes.contains("apiKey"));
+    QCOMPARE(profile(path, id).value(QStringLiteral("api_key")).toString(),
+             QStringLiteral("temporary-fixture-key"));
     loreforge::app::LlmWorkbench restored(nullptr, path);
-    QCOMPARE(child<QComboBox>(restored, "llmModelSize")->currentText(), QStringLiteral("30B"));
+    QVERIFY(restored.setProject(path, id));
+    QCOMPARE(child<QLineEdit>(restored, "llmApiKey")->text(),
+             QStringLiteral("temporary-fixture-key"));
+    QVERIFY(child<QCheckBox>(restored, "llmAllowHttp")->isChecked());
+    QVERIFY(restored.setProject(otherPath, otherId));
     QVERIFY(child<QLineEdit>(restored, "llmApiKey")->text().isEmpty());
-    QVERIFY(!child<QCheckBox>(restored, "llmAllowHttp")->isChecked());
+    child<QLineEdit>(restored, "llmApiKey")->setText(QStringLiteral("other-fixture-key"));
+    QTRY_COMPARE(profile(otherPath, otherId).value(QStringLiteral("api_key")).toString(),
+                 QStringLiteral("other-fixture-key"));
+    QVERIFY(restored.setProject(path, id));
+    QCOMPARE(child<QLineEdit>(restored, "llmApiKey")->text(),
+             QStringLiteral("temporary-fixture-key"));
+    child<QPushButton>(restored, "llmClearSavedKey")->click();
+    QVERIFY(profile(path, id).value(QStringLiteral("api_key")).toString().isEmpty());
+    QCOMPARE(profile(otherPath, otherId).value(QStringLiteral("api_key")).toString(),
+             QStringLiteral("other-fixture-key"));
     QVERIFY(!child<QPushButton>(restored, "llmCancelTest")->isEnabled());
+    loreforge::app::LlmWorkbench session;
+    configure(session, QStringLiteral("https://example.invalid/chat/completions"));
+    child<QLineEdit>(session, "llmApiKey")->setText(QStringLiteral("session-temporary-key"));
+    // Existing project settings always win; session data must not overwrite them.
+    QVERIFY(session.setProject(otherPath, otherId));
+    QCOMPARE(child<QLineEdit>(session, "llmApiKey")->text(), QStringLiteral("other-fixture-key"));
+    QVERIFY(session.setProject({}));
+    child<QLineEdit>(session, "llmApiKey")->setText(QStringLiteral("new-session-key"));
+    const auto freshPath = directory.filePath(QStringLiteral("fresh.loreforge"));
+    QVERIFY(createProfile(freshPath, id));
+    QVERIFY(session.setProject(freshPath, id));
+    QCOMPARE(profile(freshPath, id).value(QStringLiteral("api_key")).toString(),
+             QStringLiteral("new-session-key"));
 }
 
 void LlmWorkbenchTest::testsPrivateApiWithoutSendingSource() {
@@ -374,8 +476,7 @@ void LlmWorkbenchTest::testsPrivateApiWithoutSendingSource() {
         QVERIFY(page.grab().save(preview));
     }
     child<QLineEdit>(page, "llmModelId")->setText(QStringLiteral("another-model"));
-    QVERIFY(
-        child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("重新测试")));
+    QVERIFY(child<QLabel>(page, "llmConnectionStatus")->text().contains(QStringLiteral("本会话")));
 }
 
 void LlmWorkbenchTest::rejectsUnsafeConfigurationAndRedactsFailures() {

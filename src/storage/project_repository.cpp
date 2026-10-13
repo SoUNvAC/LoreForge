@@ -2,6 +2,7 @@
 
 #include "loreforge/storage/project_database.h"
 
+#include <QJsonDocument>
 #include <QSqlError>
 #include <QSqlQuery>
 
@@ -84,6 +85,54 @@ StorageResult<QList<ProjectRecord>> ProjectRepository::list() const {
         projects.append(std::get<ProjectRecord>(std::move(project)));
     }
     return projects;
+}
+
+StorageStatus ProjectRepository::saveApiSettings(const core::ProjectId& projectId,
+                                                 const QJsonObject& settings) {
+    const auto encoded = QJsonDocument(settings).toJson(QJsonDocument::Compact);
+    if (!projectId.isValid() || encoded.size() > 1024 * 1024) {
+        return StorageError{StorageErrorCode::InvalidArgument,
+                            QStringLiteral("API configuration is invalid or too large."),
+                            {},
+                            true};
+    }
+    QSqlQuery query(database_.database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO project_api_settings(project_id, settings_json) VALUES(?, ?) ON "
+        "CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json"));
+    query.addBindValue(projectId.toString());
+    query.addBindValue(QString::fromUtf8(encoded));
+    if (!query.exec()) {
+        // Never expose driver text for an operation carrying credentials.
+        return StorageError{StorageErrorCode::SqlError,
+                            QStringLiteral("API configuration could not be saved."),
+                            {},
+                            true};
+    }
+    return std::nullopt;
+}
+
+StorageResult<QJsonObject> ProjectRepository::apiSettings(const core::ProjectId& projectId) const {
+    QSqlQuery query(database_.database());
+    query.prepare(
+        QStringLiteral("SELECT settings_json FROM project_api_settings WHERE project_id = ?"));
+    query.addBindValue(projectId.toString());
+    if (!query.exec())
+        return StorageError{StorageErrorCode::SqlError,
+                            QStringLiteral("API configuration could not be read."),
+                            {},
+                            true};
+    if (!query.next())
+        return QJsonObject{};
+    const auto bytes = query.value(0).toString().toUtf8();
+    const auto value =
+        bytes.size() <= 1024 * 1024 ? QJsonDocument::fromJson(bytes) : QJsonDocument{};
+    if (!value.isObject())
+        return StorageError{StorageErrorCode::CorruptData,
+                            QStringLiteral("Stored API configuration is invalid."),
+                            {},
+                            true};
+    return value.object();
 }
 
 } // namespace loreforge::storage

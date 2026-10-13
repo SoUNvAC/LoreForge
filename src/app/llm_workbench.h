@@ -1,6 +1,7 @@
 #pragma once
 
 #include "analysis_connection.h"
+#include "loreforge/core/identifier.h"
 #include "loreforge/llm/qwen_client.h"
 #include "task_indicator.h"
 
@@ -14,7 +15,7 @@ class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
-class QSettings;
+class QTimer;
 class QSpinBox;
 
 namespace loreforge::app {
@@ -27,10 +28,14 @@ class LlmWorkbench final : public QWidget {
     [[nodiscard]] std::variant<AnalysisConnection, QString> analysisConnection() const;
     void setAnalysisBusy(bool busy);
     void showAnalysisMetrics(QString message);
+    bool setProject(QString databasePath, core::ProjectId projectId = {});
+    bool flushConfiguration();
+    void setAnalysisBudgets(int maximumTokens, int reservedTokens);
 
   signals:
     void configurationChanged();
     void taskStatus(QUuid id, TaskState state, QString text);
+    void analysisBudgetsLoaded(int maximumTokens, int reservedTokens);
 
   private:
     void saveConfiguration();
@@ -42,10 +47,15 @@ class LlmWorkbench final : public QWidget {
     void finishTest(llm::LLMResult result);
     [[nodiscard]] QString configurationError() const;
 
-    std::unique_ptr<QSettings> settings_;
+    QString projectPath_;
+    core::ProjectId projectId_;
+    QTimer* saveTimer_ = nullptr;
+    bool loading_ = false;
+    bool dirty_ = false;
+    int analysisMaximum_ = 32768;
+    int analysisReserved_ = 4096;
     std::unique_ptr<llm::QwenClient> client_;
     QLineEdit* endpoint_ = nullptr;
-    QComboBox* modelSize_ = nullptr;
     QLineEdit* modelId_ = nullptr;
     QLineEdit* apiKey_ = nullptr;
     QCheckBox* allowHttp_ = nullptr;
@@ -56,6 +66,7 @@ class LlmWorkbench final : public QWidget {
     QSpinBox* timeout_ = nullptr;
     QSpinBox* outputBudget_ = nullptr;
     QPushButton* save_ = nullptr;
+    QPushButton* clearKey_ = nullptr;
     QPushButton* test_ = nullptr;
     QPushButton* cancel_ = nullptr;
     QPushButton* resetTokens_ = nullptr;

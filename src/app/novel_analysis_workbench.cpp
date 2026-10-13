@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QLabel>
@@ -45,27 +46,36 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     chapters_ = new QComboBox(this);
     chapters_->setObjectName(QStringLiteral("analysisChapterSelector"));
     layout->addWidget(chapters_);
-    auto* budgets = new QFormLayout;
-    contextLimit_ = new QSpinBox(this);
+    auto* budgetGroup = new QGroupBox(tr("分析参数（随工程保存，按需修改）"), this);
+    budgetGroup->setObjectName(QStringLiteral("analysisBudgetOptions"));
+    budgetGroup->setCheckable(true);
+    budgetGroup->setChecked(false);
+    auto* budgetBody = new QWidget(budgetGroup);
+    auto* budgetLayout = new QVBoxLayout(budgetGroup);
+    budgetLayout->addWidget(budgetBody);
+    auto* budgets = new QFormLayout(budgetBody);
+    contextLimit_ = new QSpinBox(budgetBody);
     contextLimit_->setObjectName(QStringLiteral("llmChapterContextLimit"));
     contextLimit_->setRange(1024, 1048576);
     contextLimit_->setValue(32768);
-    outputBudget_ = new QSpinBox(this);
+    outputBudget_ = new QSpinBox(budgetBody);
     outputBudget_->setObjectName(QStringLiteral("llmChapterOutputBudget"));
     outputBudget_->setRange(256, 65536);
     outputBudget_->setValue(4096);
     budgets->addRow(tr("上下文总上限 token（按服务实际配置填写）"), contextLimit_);
     budgets->addRow(tr("每角色预留输出 token"), outputBudget_);
-    layout->addLayout(budgets);
+    budgetBody->hide();
+    connect(budgetGroup, &QGroupBox::toggled, budgetBody, &QWidget::setVisible);
+    layout->addWidget(budgetGroup);
     auto* buttons = new QHBoxLayout;
-    prepare_ = new QPushButton(tr("准备当前章快照与预览"), this);
+    prepare_ = new QPushButton(tr("仅预览原文与请求（可选）"), this);
     prepare_->setObjectName(QStringLiteral("llmPrepareChapterPreview"));
     analyze_ = new QPushButton(tr("开始单章分析"), this);
     analyze_->setObjectName(QStringLiteral("llmAnalyzeChapter"));
     cancel_ = new QPushButton(tr("取消任务"), this);
     cancel_->setObjectName(QStringLiteral("analysisCancelTask"));
-    buttons->addWidget(prepare_);
     buttons->addWidget(analyze_);
+    buttons->addWidget(prepare_);
     buttons->addWidget(cancel_);
     layout->addLayout(buttons);
     previewStatus_ = new QLabel(tr("请先导入并选择 Markdown 章节。准备预览不会发送正文。"), this);
@@ -73,7 +83,15 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     previewStatus_->setWordWrap(true);
     previewStatus_->setTextFormat(Qt::PlainText);
     layout->addWidget(previewStatus_);
-    auto* previews = new QTabWidget(this);
+    auto* previewGroup = new QGroupBox(tr("原文与请求预览（可选）"), this);
+    previewGroup->setObjectName(QStringLiteral("analysisPreviewOptions"));
+    previewGroup->setCheckable(true);
+    previewGroup->setChecked(false);
+    auto* previewLayout = new QVBoxLayout(previewGroup);
+    auto* previews = new QTabWidget(previewGroup);
+    previewLayout->addWidget(previews);
+    previews->hide();
+    connect(previewGroup, &QGroupBox::toggled, previews, &QWidget::setVisible);
     sourcePreview_ = new QPlainTextEdit(previews);
     sourcePreview_->setObjectName(QStringLiteral("llmChapterSourcePreview"));
     sourcePreview_->setReadOnly(true);
@@ -83,7 +101,7 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     messages_->setReadOnly(true);
     previews->addTab(sourcePreview_, tr("原文预览"));
     previews->addTab(messages_, tr("完整消息 JSON"));
-    layout->addWidget(previews);
+    layout->addWidget(previewGroup);
     taskStatus_ = new QLabel(tr("尚无任务，不自动发送或恢复任务。"), this);
     taskStatus_->setObjectName(QStringLiteral("analysisTaskStatus"));
     taskStatus_->setWordWrap(true);
@@ -118,18 +136,21 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
         tree->setMinimumHeight(200);
         results_.append(tree);
         results->addTab(tree, title);
-        connect(tree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
-            if (!item || !item->data(0, Qt::UserRole).isValid()) {
-                return;
-            }
-            const auto quote = item->data(0, Qt::UserRole).toString();
-            evidence_->setPlainText(quote);
-            auto cursor = sourcePreview_->textCursor();
-            cursor.setPosition(item->data(0, Qt::UserRole + 1).toInt());
-            cursor.setPosition(item->data(0, Qt::UserRole + 2).toInt(), QTextCursor::KeepAnchor);
-            sourcePreview_->setTextCursor(cursor);
-            sourcePreview_->ensureCursorVisible();
-        });
+        connect(tree, &QTreeWidget::currentItemChanged, this,
+                [this, previewGroup](QTreeWidgetItem* item) {
+                    if (!item || !item->data(0, Qt::UserRole).isValid()) {
+                        return;
+                    }
+                    const auto quote = item->data(0, Qt::UserRole).toString();
+                    previewGroup->setChecked(true);
+                    evidence_->setPlainText(quote);
+                    auto cursor = sourcePreview_->textCursor();
+                    cursor.setPosition(item->data(0, Qt::UserRole + 1).toInt());
+                    cursor.setPosition(item->data(0, Qt::UserRole + 2).toInt(),
+                                       QTextCursor::KeepAnchor);
+                    sourcePreview_->setTextCursor(cursor);
+                    sourcePreview_->ensureCursorVisible();
+                });
     }
     layout->addWidget(results);
     evidence_ = new QPlainTextEdit(this);
@@ -150,28 +171,47 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     layout->addWidget(diagnostics_);
     connect(chapters_, &QComboBox::currentIndexChanged, this,
             &NovelAnalysisWorkbench::chapterSelected);
-    connect(prepare_, &QPushButton::clicked, this, [this] {
+    connect(prepare_, &QPushButton::clicked, this, [this, previewGroup] {
+        previewGroup->setChecked(true);
         emit chapterPreviewRequested(contextLimit_->value(), outputBudget_->value());
     });
     connect(contextLimit_, &QSpinBox::valueChanged, this,
             &NovelAnalysisWorkbench::invalidatePreview);
     connect(outputBudget_, &QSpinBox::valueChanged, this,
             &NovelAnalysisWorkbench::invalidatePreview);
+    const auto budgetsChanged = [this] {
+        emit this->budgetsChanged(contextLimit_->value(), outputBudget_->value());
+    };
+    connect(contextLimit_, &QSpinBox::valueChanged, this, budgetsChanged);
+    connect(outputBudget_, &QSpinBox::valueChanged, this, budgetsChanged);
     connect(cancel_, &QPushButton::clicked, this, &NovelAnalysisWorkbench::cancellationRequested);
     connect(historyList_, &QListWidget::currentRowChanged, this,
             &NovelAnalysisWorkbench::showHistoryEntry);
     connect(analyze_, &QPushButton::clicked, this, [this] {
-        if (!preview_ || busy_) {
+        if (busy_ || !available_) {
             return;
         }
+        if (connectionValidator_) {
+            const auto error = connectionValidator_();
+            if (!error.isEmpty()) {
+                showError(error);
+                return;
+            }
+        }
+        // Preparation is local and synchronous; every start rechecks current source.
+        emit chapterPreviewRequested(contextLimit_->value(), outputBudget_->value());
+        if (!preview_)
+            return;
         const auto id = preview_->snapshot.id;
         QMessageBox dialog(
             QMessageBox::Question, tr("确认发送本章"),
-            tr("将当前章原文发送到 LLM 页配置的 API，并最多串行运行分析、复核、审查三次。\n"
-               "后续角色会收到本章原文和前一步输出；不包含其他章节，不自动重试、不自动改写。\n"
-               "请求和结果将保存到项目，可能包含小说原文。确认继续？"),
+            tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
+                tr("将当前章原文发送到以上 API，并最多串行运行分析、复核、审查三次。\n"
+                   "后续角色会收到本章原文和前一步输出；不包含其他章节，不自动重试、不自动改写。\n"
+                   "请求和结果将保存到项目，可能包含小说原文。确认继续？"),
             QMessageBox::NoButton, this);
         dialog.setObjectName(QStringLiteral("analysisSendConfirmation"));
+        dialog.setTextFormat(Qt::PlainText);
         auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
         confirm->setObjectName(QStringLiteral("analysisConfirmSend"));
         auto* cancel = dialog.addButton(tr("取消"), QMessageBox::RejectRole);
@@ -188,7 +228,7 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
 
 void NovelAnalysisWorkbench::updateButtons() {
     prepare_->setEnabled(available_ && !busy_);
-    analyze_->setEnabled(available_ && preview_.has_value() && !busy_);
+    analyze_->setEnabled(available_ && !busy_);
     cancel_->setEnabled(busy_);
     chapters_->setEnabled(!busy_);
     contextLimit_->setEnabled(!busy_);
@@ -226,8 +266,24 @@ void NovelAnalysisWorkbench::invalidatePreview() {
     preview_.reset();
     sourcePreview_->clear();
     messages_->clear();
-    previewStatus_->setText(tr("请选择章节并准备快照；配置/预算/章节变更后须重新准备。"));
+    previewStatus_->setText(tr("选章后可直接开始分析，程序会自动准备并检查原文；也可先预览。"));
     updateButtons();
+}
+
+void NovelAnalysisWorkbench::restoreBudgets(int maximum, int reserved) {
+    const QSignalBlocker first(contextLimit_);
+    const QSignalBlocker second(outputBudget_);
+    contextLimit_->setValue(maximum);
+    outputBudget_->setValue(reserved);
+    invalidatePreview();
+}
+
+void NovelAnalysisWorkbench::setConnectionValidator(std::function<QString()> validator) {
+    connectionValidator_ = std::move(validator);
+}
+
+void NovelAnalysisWorkbench::setConnectionSummary(QString summary) {
+    connectionSummary_ = std::move(summary);
 }
 void NovelAnalysisWorkbench::showChapterPreview(const ChapterPreview& preview) {
     preview_ = preview;
@@ -338,8 +394,9 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
     sourcePreview_->setPlainText(displayedSource_.value(QStringLiteral("utf8")).toString());
     messages_->setPlainText(QString::fromUtf8(
         QJsonDocument(entry.context.content.value(QStringLiteral("messages")).toArray()).toJson()));
-    previewStatus_->setText(tr("正在查看历史角色快照：%1；不是实时原文。开始新任务前请重新准备。")
-                                .arg(entry.context.id.toString()));
+    previewStatus_->setText(
+        tr("正在查看历史快照：%1；不是实时原文。点击开始会自动重读并核验当前原文。")
+            .arg(entry.context.id.toString()));
     preview_.reset();
     updateButtons();
     diagnostics_->setPlainText(

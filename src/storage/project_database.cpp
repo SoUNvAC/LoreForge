@@ -16,7 +16,7 @@
 namespace loreforge::storage {
 namespace {
 
-constexpr int latestSchemaVersion = 6;
+constexpr int latestSchemaVersion = 7;
 
 StorageError makeError(StorageErrorCode code, QString message, QString details = {},
                        bool recoverable = true) {
@@ -386,6 +386,42 @@ StorageStatus applyRepairQueueMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
+StorageStatus applyApiSettingsMigration(QSqlDatabase& database) {
+    QFile migration(QStringLiteral(":/loreforge/migrations/007_project_api_settings.sql"));
+    if (!migration.open(QIODevice::ReadOnly | QIODevice::Text) || !database.transaction()) {
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("Could not start API settings migration."), {}, false);
+    }
+    if (const auto error = executeSql(database, QString::fromUtf8(migration.readAll()),
+                                      StorageErrorCode::MigrationFailed,
+                                      QStringLiteral("Could not create API settings table."))) {
+        database.rollback();
+        return error;
+    }
+    QSqlQuery query(database);
+    query.prepare(
+        QStringLiteral("INSERT INTO schema_migrations(version, name, applied_at) VALUES(7, ?, ?)"));
+    query.addBindValue(QStringLiteral("007_project_api_settings"));
+    query.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!query.exec()) {
+        database.rollback();
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("Could not record API settings migration."), {}, false);
+    }
+    if (const auto error = executeSql(database, QStringLiteral("PRAGMA user_version = 7"),
+                                      StorageErrorCode::MigrationFailed,
+                                      QStringLiteral("Could not update schema version."))) {
+        database.rollback();
+        return error;
+    }
+    if (!database.commit()) {
+        database.rollback();
+        return makeError(StorageErrorCode::MigrationFailed,
+                         QStringLiteral("Could not commit API settings migration."), {}, false);
+    }
+    return std::nullopt;
+}
+
 StorageStatus verifySchema(QSqlDatabase& database) {
     QSqlQuery integrity(database);
     if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
@@ -429,7 +465,7 @@ StorageStatus verifySchema(QSqlDatabase& database) {
                            "'llm_runs', 'prompt_templates', 'prompt_versions', 'output_schemas', "
                            "'context_snapshots', 'llm_run_artifacts', 'chapter_memory_records', "
                            "'story_state_snapshots', 'proofreading_candidates', "
-                           "'protected_terms')"))) {
+                           "'protected_terms', 'project_api_settings')"))) {
         return sqlError(StorageErrorCode::CorruptDatabase,
                         QStringLiteral("The project database schema could not be inspected."),
                         tables.lastError());
@@ -454,10 +490,25 @@ StorageStatus verifySchema(QSqlDatabase& database) {
         QStringLiteral("story_state_snapshots"),
         QStringLiteral("proofreading_candidates"),
         QStringLiteral("protected_terms"),
+        QStringLiteral("project_api_settings"),
     };
     if (presentTables != requiredTables) {
         return makeError(StorageErrorCode::CorruptDatabase,
                          QStringLiteral("The project database schema is incomplete."), {}, false);
+    }
+    QSqlQuery settingsColumns(database);
+    if (!settingsColumns.exec(QStringLiteral("PRAGMA table_info(project_api_settings)"))) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The API settings schema could not be inspected."), {},
+                         false);
+    }
+    QSet<QString> settingsNames;
+    while (settingsColumns.next())
+        settingsNames.insert(settingsColumns.value(1).toString());
+    if (settingsNames !=
+        QSet<QString>{QStringLiteral("project_id"), QStringLiteral("settings_json")}) {
+        return makeError(StorageErrorCode::CorruptDatabase,
+                         QStringLiteral("The API settings schema is incomplete."), {}, false);
     }
     QSqlQuery blockColumns(database);
     if (!blockColumns.exec(QStringLiteral("PRAGMA table_info(blocks)"))) {
@@ -703,6 +754,11 @@ StorageResult<int> migrate(QSqlDatabase& database) {
         version = 6;
     }
 
+    if (version == 6) {
+        if (const auto error = applyApiSettingsMigration(database))
+            return *error;
+        version = 7;
+    }
     QSqlQuery userVersion(database);
     if (!userVersion.exec(QStringLiteral("PRAGMA user_version")) || !userVersion.next()) {
         return sqlError(StorageErrorCode::MigrationFailed,

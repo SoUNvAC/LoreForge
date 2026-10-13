@@ -41,4 +41,5 @@ qt_add_resources(
         migrations/004_inference_artifacts.sql
         migrations/005_story_memory.sql
         migrations/006_repair_queue.sql
+        migrations/007_project_api_settings.sql
 )

@@ -22,6 +22,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -232,6 +233,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     analysisScroll->setWidget(analysisWorkbench_);
     pages->addTab(analysisScroll, tr("小说分析"));
     analysisController_ = new ChapterAnalysisController(this);
+    analysisWorkbench_->setConnectionValidator([this, pages] {
+        const auto result = llmWorkbench_->analysisConnection();
+        if (const auto* error = std::get_if<QString>(&result)) {
+            const auto message = tr("请先配置当前工程的 API：%1").arg(*error);
+            pages->setCurrentIndex(1);
+            showStatusMessage(message);
+            return message;
+        }
+        const auto& connection = std::get<AnalysisConnection>(result);
+        analysisWorkbench_->setConnectionSummary(
+            tr("模型：%1\n接口：%2\n思考：%3")
+                .arg(connection.options.defaultModel, connection.options.endpoint.toString(),
+                     !connection.options.enableThinking.has_value()
+                         ? tr("跟随服务端")
+                         : (*connection.options.enableThinking ? tr("开启") : tr("关闭"))));
+        return QString{};
+    });
     connect(llmWorkbench_, &LlmWorkbench::taskStatus, taskIndicator_, &TaskIndicator::report);
     connect(analysisController_, &ChapterAnalysisController::taskStatus, this,
             [this](TaskState state, const QString& text) {
@@ -252,6 +270,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &LlmWorkbench::showAnalysisMetrics);
     connect(llmWorkbench_, &LlmWorkbench::configurationChanged, analysisWorkbench_,
             &NovelAnalysisWorkbench::invalidatePreview);
+    connect(llmWorkbench_, &LlmWorkbench::analysisBudgetsLoaded, analysisWorkbench_,
+            &NovelAnalysisWorkbench::restoreBudgets);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::budgetsChanged, llmWorkbench_,
+            &LlmWorkbench::setAnalysisBudgets);
     connect(analysisController_, &ChapterAnalysisController::busyChanged, llmWorkbench_,
             &LlmWorkbench::setAnalysisBusy);
     connect(analysisController_, &ChapterAnalysisController::busyChanged, analysisWorkbench_,
@@ -346,6 +368,10 @@ void MainWindow::inspectContext(const context::ContextInspectorData& context) {
 }
 
 bool MainWindow::importMarkdownSource(QStringView sourcePath, QStringView projectPath) {
+    if (!llmWorkbench_->flushConfiguration()) {
+        showStatusMessage(tr("当前工程 API 配置保存失败，已保留当前工程与修改，未导入。"));
+        return false;
+    }
     const auto taskId = QUuid::createUuid();
     taskIndicator_->report(taskId, TaskState::Local, tr("正在导入小说"));
     auto parsed = parser::MarkdownSourceParser::parseDirectory(sourcePath);
@@ -551,6 +577,10 @@ void MainWindow::reloadRepairQueue() {
 }
 
 bool MainWindow::openProjectFile(QStringView filePath) {
+    if (!llmWorkbench_->flushConfiguration()) {
+        showStatusMessage(tr("当前工程 API 配置保存失败，已保留当前工程与修改，未切换。"));
+        return false;
+    }
     const auto requestedPath = filePath.trimmed();
     if (requestedPath.isEmpty()) {
         showLoadError(tr("A project file path is required."));
@@ -600,6 +630,8 @@ void MainWindow::chooseProjectFile() {
 }
 
 void MainWindow::setWorkspace(StoredWorkspace workspace) {
+    analysisController_->cancel();
+    llmWorkbench_->setProject({});
     workspace_ = std::move(workspace);
     selectedProjectIndex_ = -1;
     selectedBookIndex_ = -1;
@@ -646,12 +678,22 @@ void MainWindow::setWorkspace(StoredWorkspace workspace) {
 }
 
 void MainWindow::selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
-    static_cast<void>(previous);
+    if (!llmWorkbench_->flushConfiguration()) {
+        const QSignalBlocker blocker(projectExplorer_);
+        projectExplorer_->setCurrentItem(previous);
+        showStatusMessage(tr("当前 API 配置保存失败，已保留修改，未切换工程。"));
+        return;
+    }
     if (current == nullptr || !workspace_.has_value()) {
         clearBookView();
         return;
     }
     const auto projectIndex = current->data(0, kProjectIndexRole).toLongLong();
+    if (projectIndex >= 0 && projectIndex < workspace_->projects.size()) {
+        analysisController_->cancel();
+        llmWorkbench_->setProject(openedDatabasePath_,
+                                  workspace_->projects[projectIndex].metadata.id);
+    }
     const auto bookIndex = current->data(0, kBookIndexRole).toLongLong();
     if (bookIndex < 0) {
         if (current->childCount() > 0) {
@@ -811,6 +853,11 @@ void MainWindow::startChapterAnalysis() {
     const auto preview = *analysisWorkbench_->preview();
     analysisTaskId_ = QUuid::createUuid();
     taskIndicator_->report(analysisTaskId_, TaskState::Local, tr("正在检查分析请求"));
+    if (!llmWorkbench_->flushConfiguration()) {
+        analysisWorkbench_->showError(tr("工程 API 配置保存失败，未发送。"));
+        taskIndicator_->report(analysisTaskId_, TaskState::Failed, tr("API 配置保存失败，未发送"));
+        return;
+    }
     const auto connection = llmWorkbench_->analysisConnection();
     if (const auto* error = std::get_if<QString>(&connection)) {
         analysisWorkbench_->showError(*error);
@@ -855,6 +902,7 @@ void MainWindow::reloadAnalysisHistory() {
 }
 
 void MainWindow::showLoadError(QString message) {
+    llmWorkbench_->setProject({});
     openedDatabasePath_.clear();
     workspace_.reset();
     repairQueue_->setItems({});

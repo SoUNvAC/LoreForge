@@ -35,6 +35,7 @@ class StorageIntegrationTest final : public QObject {
     void failedBookSaveRollsBackAllTables();
     void migratesAnExistingVersionZeroDatabase();
     void migratesAnExistingVersionOneDatabase();
+    void migratesVersionSixAndPersistsIsolatedApiSettings();
     void persistsLLMRunsAcrossReopen();
     void preservesInspectableInferenceSnapshotsAcrossReopen();
     void persistsAndDeterministicallyRebuildsStoryState();
@@ -132,6 +133,63 @@ bool executeRawSql(const QString& databasePath, const QString& sql) {
 
 } // namespace
 
+void StorageIntegrationTest::migratesVersionSixAndPersistsIsolatedApiSettings() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(u"legacy-six.loreforge"_s);
+    const auto first = loreforge::core::ProjectId::fromStableKey(u"profile-one"_s);
+    const auto second = loreforge::core::ProjectId::fromStableKey(u"profile-two"_s);
+    {
+        auto created = loreforge::storage::ProjectDatabase::create(path);
+        auto database = takeDatabase(created);
+        loreforge::storage::ProjectRepository projects(*database);
+        QVERIFY(!projects.create({first, u"Preserved project"_s, QDateTime::currentDateTimeUtc()}));
+        QVERIFY(!projects.create({second, u"Second project"_s, QDateTime::currentDateTimeUtc()}));
+    }
+    QVERIFY(executeRawSql(path, u"DROP TABLE project_api_settings"_s));
+    QVERIFY(executeRawSql(path, u"DELETE FROM schema_migrations WHERE version = 7"_s));
+    QVERIFY(executeRawSql(path, u"PRAGMA user_version = 6"_s));
+    const QJsonObject settings{{u"api_key"_s, u"temporary-fixture-key"_s},
+                               {u"model_id"_s, u"fixture-model"_s}};
+    {
+        auto opened = loreforge::storage::ProjectDatabase::open(path);
+        QVERIFY(
+            std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
+        auto database = takeDatabase(opened);
+        QCOMPARE(database->schemaVersion(), 7);
+        loreforge::storage::ProjectRepository projects(*database);
+        const auto project = projects.find(first);
+        QVERIFY(std::holds_alternative<loreforge::storage::ProjectRecord>(project));
+        QCOMPARE(std::get<loreforge::storage::ProjectRecord>(project).name, u"Preserved project"_s);
+        QVERIFY(!projects.saveApiSettings(first, settings));
+        auto other = projects.apiSettings(second);
+        QVERIFY(std::get<QJsonObject>(other).isEmpty());
+        const auto rolledBack =
+            database->runInTransaction([&]() -> loreforge::storage::StorageStatus {
+                if (const auto error =
+                        projects.saveApiSettings(first, {{u"api_key"_s, u"must-roll-back"_s}}))
+                    return error;
+                return loreforge::storage::StorageError{
+                    loreforge::storage::StorageErrorCode::InvalidArgument, u"fixture"_s, {}, true};
+            });
+        QVERIFY(rolledBack);
+        QCOMPARE(std::get<QJsonObject>(projects.apiSettings(first)), settings);
+    }
+    {
+        auto opened = loreforge::storage::ProjectDatabase::open(path);
+        auto database = takeDatabase(opened);
+        loreforge::storage::ProjectRepository projects(*database);
+        QCOMPARE(std::get<QJsonObject>(projects.apiSettings(first)), settings);
+        const auto failure = projects.saveApiSettings(
+            loreforge::core::ProjectId::fromStableKey(u"missing"_s), settings);
+        QVERIFY(failure);
+        QVERIFY(!failure->technicalDetails.contains(u"temporary-fixture-key"_s));
+    }
+    QVERIFY(executeRawSql(
+        path, u"ALTER TABLE project_api_settings RENAME COLUMN settings_json TO broken"_s));
+    QVERIFY(std::holds_alternative<loreforge::storage::StorageError>(
+        loreforge::storage::ProjectDatabase::open(path)));
+}
+
 void StorageIntegrationTest::createsAndReopensAProject() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -140,7 +198,7 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     auto created = loreforge::storage::ProjectDatabase::create(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(created));
     auto database = takeDatabase(created);
-    QCOMPARE(database->schemaVersion(), 6);
+    QCOMPARE(database->schemaVersion(), 7);
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(!projects.create(projectRecord()).has_value());
     const auto projectList = projects.list();
@@ -231,7 +289,7 @@ void StorageIntegrationTest::migratesAnExistingVersionZeroDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 6);
+    QCOMPARE(database->schemaVersion(), 7);
     database.reset();
 
     QVERIFY(executeRawSql(databasePath,
@@ -275,7 +333,7 @@ void StorageIntegrationTest::migratesAnExistingVersionOneDatabase() {
     auto opened = loreforge::storage::ProjectDatabase::open(databasePath);
     QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
     auto database = takeDatabase(opened);
-    QCOMPARE(database->schemaVersion(), 6);
+    QCOMPARE(database->schemaVersion(), 7);
     database.reset();
     QVERIFY(executeRawSql(databasePath,
                           QStringLiteral("SELECT extraction_confidence FROM blocks LIMIT 1")));

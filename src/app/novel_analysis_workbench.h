@@ -3,6 +3,7 @@
 #include "chapter_analysis_controller.h"
 
 #include <QWidget>
+#include <functional>
 
 class QComboBox;
 class QLabel;
@@ -17,6 +18,9 @@ namespace loreforge::app {
 class NovelAnalysisWorkbench final : public QWidget {
     Q_OBJECT
   public:
+    void restoreBudgets(int maximumTokens, int reservedTokens);
+    void setConnectionValidator(std::function<QString()> validator);
+    void setConnectionSummary(QString summary);
     explicit NovelAnalysisWorkbench(QWidget* parent = nullptr);
     void setSelectedBook(const document::Document* book, qsizetype chapterIndex);
     void showChapterPreview(const ChapterPreview& preview);
@@ -28,6 +32,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void invalidatePreview();
 
   signals:
+    void budgetsChanged(int maximumTokens, int reservedTokens);
     void chapterSelected(int index);
     void chapterPreviewRequested(int maximumTokens, int reservedTokens);
     void analysisRequested();
@@ -60,5 +65,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     std::optional<ChapterPreview> preview_;
     bool available_ = false;
     bool busy_ = false;
+    std::function<QString()> connectionValidator_;
+    QString connectionSummary_;
 };
 } // namespace loreforge::app
