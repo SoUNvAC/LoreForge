@@ -1,0 +1,24 @@
+#pragma once
+
+#include <QString>
+
+namespace loreforge::app {
+// Bump every affected immutable role prompt when these shared semantics change.
+inline constexpr int characterAliasPromptVersion = 2;
+
+inline QString characterAliasPolicy() {
+    return QStringLiteral(
+        "人物别名规则：指代某个人不等于这个人的固定别名。"
+        "逐项区分姓名、固定别名、自称、临时称谓与亲属指代；aliases 只收有本章证据支持的固定别名。"
+        "我、俺、老子、老娘、本王等在说话者自称时不收为别名，也不得因此归到父亲等其他人物。"
+        "例如‘老子今天就不走了’是说话者自称；‘我老子不让我去’是亲属指代，"
+        "须结合说话者与上下文确定对象，不直接收为别名。父亲、妈妈、老师等关系或职务称谓"
+        "也不自动成为固定别名。必须有明确命名、绰号说明或足以证明稳定称呼及同一身份的上下文；"
+        "同一个词重复出现本身不是充分证据。别名自己的 evidence 必须支持名称与人物的对应关系，"
+        "不能只证明这个词出现过。不确定时 aliases 留空或省去该项，不用低 confidence 或 "
+        "inferred=true"
+        "绕过别名证据要求。不要按词语黑名单删除：‘老子提出了……’可能指历史人物老子，"
+        "应按上下文作为人物识别；‘大家都叫张明老狼’则可支持张明的固定别名老狼。"
+        "若作品确实明确命名某人物为老子等词，也应按该命名证据处理。");
+}
+} // namespace loreforge::app

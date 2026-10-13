@@ -154,7 +154,7 @@ void ChapterPreviewTest::persistsImmutableVersionsAndReusesSnapshots() {
     QVERIFY(std::holds_alternative<loreforge::inference::ContextSnapshot>(stored));
     QCOMPARE(std::get<loreforge::inference::ContextSnapshot>(stored), preview.snapshot);
     QVERIFY(std::holds_alternative<loreforge::inference::PromptVersion>(
-        repository.findPromptVersion(preview.prompt.prompt.id, 1)));
+        repository.findPromptVersion(preview.prompt.prompt.id, preview.prompt.version)));
     QVERIFY(std::holds_alternative<loreforge::inference::OutputSchema>(
         repository.findOutputSchema(preview.schema.id, 1)));
 }
@@ -171,8 +171,8 @@ void ChapterPreviewTest::rollsBackFailedStorage() {
     auto database = std::get<std::unique_ptr<Database>>(std::move(created));
     QVERIFY(std::holds_alternative<Error>(Builder::store(*database, preview)));
     loreforge::storage::InferenceRepository repository(*database);
-    QVERIFY(
-        std::holds_alternative<Error>(repository.findPromptVersion(preview.prompt.prompt.id, 1)));
+    QVERIFY(std::holds_alternative<Error>(
+        repository.findPromptVersion(preview.prompt.prompt.id, preview.prompt.version)));
     QVERIFY(std::holds_alternative<Error>(repository.findOutputSchema(preview.schema.id, 1)));
     QVERIFY(std::holds_alternative<Error>(repository.findContextSnapshot(preview.snapshot.id)));
 }

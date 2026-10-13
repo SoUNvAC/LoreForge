@@ -65,7 +65,7 @@ HTTP 仅接受 localhost、回环地址、RFC1918 IPv4 或 IPv6 ULA 地址，且
 消息提供块的 UTF-8 `source_start` / `source_end` 范围，配合现有证据 schema；
 分析输出只能引用范围，系统从快照提取引用并做确定性证据校验。
 
-快照保存在现有 `.loreforge` SQLite 项目的 `context_snapshots` 中；提示词 v1 和现有
+快照保存在现有 `.loreforge` SQLite 项目的 `context_snapshots` 中；提示词 v2 和现有
 `ChapterAnalyzer` 输出 schema v1 分别写入 `prompt_versions` / `output_schemas`，无需更改数据库版本。
 记录项目/书/章 ID、导入 manifest 哈希、当前源文件哈希、章节原文字节哈希、块与来源范围、
 完整消息和预算。导入 manifest 哈希是历史记录，不宣称已重新核验整个源目录。

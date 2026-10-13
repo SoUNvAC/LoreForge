@@ -256,7 +256,114 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesIncompatibleContinuation();
     void confirmsContinuationAndShowsReviewReasons();
     void validatesLegacyAndCorruptPrerequisites();
+    void carriesAliasRulesAndPreservesSemanticVerdicts_data();
+    void carriesAliasRulesAndPreservesSemanticVerdicts();
 };
+
+void ChapterAnalysisPipelineTest::carriesAliasRulesAndPreservesSemanticVerdicts_data() {
+    QTest::addColumn<QString>("source");
+    QTest::addColumn<QString>("name");
+    QTest::addColumn<QString>("alias");
+    QTest::addColumn<QString>("verdict");
+    QTest::newRow("self-reference-misclassified")
+        << QStringLiteral("张明说：老子今天就不走了！") << QStringLiteral("张明")
+        << QStringLiteral("老子") << QStringLiteral("redo");
+    QTest::newRow("kinship-not-an-alias")
+        << QStringLiteral("张明说：我老子不让我去。") << QStringLiteral("张明") << QString()
+        << QStringLiteral("pass");
+    QTest::newRow("self-reference-wrongly-attached-to-father")
+        << QStringLiteral("父亲在门外。张明说：老子今天就不走了！") << QStringLiteral("父亲")
+        << QStringLiteral("老子") << QStringLiteral("redo");
+    QTest::newRow("historical-person-not-blacklisted")
+        << QStringLiteral("老子提出了自己的看法。") << QStringLiteral("老子") << QString()
+        << QStringLiteral("pass");
+    QTest::newRow("explicit-nickname")
+        << QStringLiteral("大家都叫张明老狼。") << QStringLiteral("张明") << QStringLiteral("老狼")
+        << QStringLiteral("pass");
+    QTest::newRow("explicit-name-not-blacklisted")
+        << QStringLiteral("张明的绰号就是老子，伙伴一直这样叫他。") << QStringLiteral("张明")
+        << QStringLiteral("老子") << QStringLiteral("pass");
+}
+
+void ChapterAnalysisPipelineTest::carriesAliasRulesAndPreservesSemanticVerdicts() {
+    QFETCH(QString, source);
+    QFETCH(QString, name);
+    QFETCH(QString, alias);
+    QFETCH(QString, verdict);
+    Fixture fixture;
+    QVERIFY(fixture.initialize(QStringLiteral("# 测试章\n\n%1\n").arg(source).toUtf8()));
+    Server server;
+    // These are scripted semantic decisions, not a claim to evaluate a real model.
+    server.makeOutput = [&](const QJsonObject& user, int index) {
+        if (index > 0) {
+            auto review = reviewFor(user, verdict);
+            if (verdict == QStringLiteral("redo")) {
+                auto issues = review.value(QStringLiteral("issues")).toArray();
+                auto issue = issues[0].toObject();
+                issue.insert(
+                    QStringLiteral("reason"),
+                    QStringLiteral("%1的别名老子实际是说话者自称，不能归为该人物的固定别名。")
+                        .arg(name));
+                issues[0] = issue;
+                review.insert(QStringLiteral("issues"), issues);
+            }
+            return review;
+        }
+        auto output = analysisFor(user);
+        auto character = output.value(QStringLiteral("characters")).toArray()[0].toObject();
+        character.insert(QStringLiteral("name"), name);
+        if (!alias.isEmpty()) {
+            auto claim = character;
+            claim.remove(QStringLiteral("aliases"));
+            claim.insert(QStringLiteral("name"), alias);
+            character.insert(QStringLiteral("aliases"), QJsonArray{claim});
+        }
+        output.insert(QStringLiteral("characters"), QJsonArray{character});
+        return output;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), 3);
+    const auto entries = history(fixture);
+    QCOMPARE(entries.size(), 3);
+    const auto savedCharacter = entries[0]
+                                    .artifacts.parsedResponse->object()
+                                    .value(QStringLiteral("characters"))
+                                    .toArray()[0]
+                                    .toObject();
+    QCOMPARE(savedCharacter.value(QStringLiteral("name")).toString(), name);
+    const auto savedAliases = savedCharacter.value(QStringLiteral("aliases")).toArray();
+    QCOMPARE(savedAliases.size(), alias.isEmpty() ? 0 : 1);
+    if (!alias.isEmpty())
+        QCOMPARE(savedAliases[0].toObject().value(QStringLiteral("name")).toString(), alias);
+    for (int role = 0; role < 3; ++role) {
+        const auto system = server.requests[role]
+                                .value(QStringLiteral("messages"))
+                                .toArray()[0]
+                                .toObject()
+                                .value(QStringLiteral("content"))
+                                .toString();
+        QVERIFY(system.contains(QStringLiteral("指代某个人不等于这个人的固定别名")));
+        QVERIFY(system.contains(QStringLiteral("说话者自称")));
+        QVERIFY(system.contains(QStringLiteral("历史人物老子")));
+        QVERIFY(system.contains(QStringLiteral("明确命名")));
+        QVERIFY(system.contains(QStringLiteral("别名自己的 evidence")));
+        if (role > 0) {
+            QVERIFY(system.contains(QStringLiteral("逐个复核")));
+            QVERIFY(system.contains(QStringLiteral("证据范围有效不代表语义正确")));
+        }
+        QCOMPARE(entries[role].artifacts.promptVersion, 2);
+        QCOMPARE(entries[role].artifacts.outputSchemaVersion, 1);
+        QCOMPARE(entries[role].run.status, storage::LLMRunStatus::Succeeded);
+    }
+    QCOMPARE(
+        entries[2].artifacts.parsedResponse->object().value(QStringLiteral("verdict")).toString(),
+        verdict);
+    QVERIFY(finished[0][0].toString().contains(
+        verdict == QStringLiteral("redo") ? QStringLiteral("自称") : QStringLiteral("通过")));
+}
 
 void ChapterAnalysisPipelineTest::continuesOnlyUnfinishedRoles_data() {
     QTest::addColumn<int>("failedRole");
@@ -463,7 +570,7 @@ void ChapterAnalysisPipelineTest::validatesLegacyAndCorruptPrerequisites() {
     controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
     QTRY_COMPARE(finished.size(), 1);
     const auto original = history(fixture)[0];
-    const auto addLegacy = [&](const QString& pipeline, bool corrupt) {
+    const auto addLegacy = [&](const QString& pipeline, bool corrupt, bool oldPrompt = false) {
         auto opened = Database::open(fixture.path);
         auto database = std::get<std::unique_ptr<Database>>(std::move(opened));
         storage::InferenceRepository repository(*database);
@@ -481,6 +588,27 @@ void ChapterAnalysisPipelineTest::validatesLegacyAndCorruptPrerequisites() {
         run.startedAt = QDateTime::currentDateTimeUtc();
         run.completedAt = run.startedAt;
         auto artifacts = original.artifacts;
+        if (oldPrompt) {
+            const auto prompt = inference::makePromptVersion(
+                {artifacts.promptTemplateId, fixture.preview.prompt.prompt.name}, 1,
+                QStringLiteral("旧版分析提示词，不包含固定别名规则。"),
+                QDateTime::currentDateTimeUtc());
+            if (repository.savePromptVersion(prompt))
+                return false;
+            artifacts.promptVersion = 1;
+            content.insert(QStringLiteral("prompt_version"), 1);
+            content.insert(QStringLiteral("prompt_sha256"), prompt.contentHash.toHex());
+            auto messages = content.value(QStringLiteral("messages")).toArray();
+            auto system = messages[0].toObject();
+            system.insert(QStringLiteral("content"), prompt.text);
+            messages[0] = system;
+            content.insert(QStringLiteral("messages"), messages);
+            snapshot = inference::makeContextSnapshot(snapshot.id, fixture.projectId, content,
+                                                      QDateTime::currentDateTimeUtc());
+            auto request = QJsonDocument::fromJson(artifacts.rawRequest).object();
+            request.insert(QStringLiteral("messages"), messages);
+            artifacts.rawRequest = QJsonDocument(request).toJson(QJsonDocument::Compact);
+        }
         artifacts.runId = run.id;
         artifacts.contextSnapshotId = snapshot.id;
         artifacts.rawResponse.reset();
@@ -497,6 +625,7 @@ void ChapterAnalysisPipelineTest::validatesLegacyAndCorruptPrerequisites() {
     };
     QVERIFY(addLegacy(QStringLiteral("legacy-pipeline"), false));
     QVERIFY(addLegacy(QStringLiteral("corrupt-pipeline"), true));
+    QVERIFY(addLegacy(QStringLiteral("v1-pipeline"), false, true));
     server.status = 200;
     server.makeOutput = {};
     controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
@@ -513,6 +642,11 @@ void ChapterAnalysisPipelineTest::validatesLegacyAndCorruptPrerequisites() {
     QTRY_COMPARE(finished.size(), 4);
     QVERIFY2(finished.last()[0].toString().contains(QStringLiteral("通过")),
              qPrintable(finished.last()[0].toString()));
+    QCOMPARE(server.requests.size(), 4);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
+                     QStringLiteral("v1-pipeline"), true);
+    QCOMPARE(finished.size(), 5);
+    QVERIFY(finished.last()[0].toString().contains(QStringLiteral("提示词或输出契约已变化")));
     QCOMPARE(server.requests.size(), 4);
 }
 
