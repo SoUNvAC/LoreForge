@@ -57,6 +57,7 @@ class MainWindow final : public QMainWindow {
     void showLoadError(QString message);
     void reloadRepairQueue();
     void reloadAnalysisHistory();
+    void runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint);
     void showStatusMessage(const QString& message, int timeoutMs = 0);
     [[nodiscard]] const document::Document* selectedBook() const;
 

@@ -264,6 +264,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::analysisRequested, this,
             &MainWindow::startChapterAnalysis);
+    connect(
+        analysisWorkbench_, &NovelAnalysisWorkbench::continuationRequested, this,
+        [this](QString pipeline, bool legacy) { runChapterAnalysis(std::move(pipeline), legacy); });
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::cancellationRequested, analysisController_,
             &ChapterAnalysisController::cancel);
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::metricsChanged, llmWorkbench_,
@@ -845,6 +848,10 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
 }
 
 void MainWindow::startChapterAnalysis() {
+    runChapterAnalysis({}, false);
+}
+
+void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint) {
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || !analysisWorkbench_->preview() || analysisController_->busy()) {
@@ -876,9 +883,9 @@ void MainWindow::startChapterAnalysis() {
                                tr("原文已变化；未发送，请重新准备"));
         return;
     }
-    analysisController_->start(openedDatabasePath_, *book,
-                               item->data(0, kChapterIndexRole).toLongLong(), preview,
-                               std::get<AnalysisConnection>(connection));
+    analysisController_->start(
+        openedDatabasePath_, *book, item->data(0, kChapterIndexRole).toLongLong(), preview,
+        std::get<AnalysisConnection>(connection), std::move(resumePipeline), allowLegacyEndpoint);
 }
 
 void MainWindow::reloadAnalysisHistory() {

@@ -106,6 +106,60 @@ core::ContextSnapshotId outcomeId(const core::LLMRunId& runId) {
 }
 } // namespace
 
+PipelineRoles latestPipelineRoles(const QList<AnalysisHistoryEntry>& entries,
+                                  const QString& pipeline) {
+    PipelineRoles result{};
+    for (const auto& entry : entries) {
+        const auto& content = entry.context.content;
+        if (content.value(QStringLiteral("pipeline_id")).toString() != pipeline)
+            continue;
+        const auto role = content.value(QStringLiteral("role_index")).toInt(-1);
+        if (role < 0 || role > 2)
+            continue;
+        const auto previous = result[role];
+        if (!previous ||
+            content.value(QStringLiteral("attempt_sequence")).toInt(role) >=
+                previous->context.content.value(QStringLiteral("attempt_sequence")).toInt(role))
+            result[role] = &entry;
+    }
+    return result;
+}
+
+int completedRolePrefix(const PipelineRoles& roles) {
+    int count = 0;
+    for (const auto* entry : roles) {
+        if (!entry || entry->run.status != storage::LLMRunStatus::Succeeded ||
+            !entry->artifacts.parsedResponse || !entry->artifacts.parsedResponse->isObject() ||
+            !entry->artifacts.validation.isValid())
+            break;
+        ++count;
+    }
+    return count;
+}
+
+QString reviewConclusion(const QJsonObject& checker, const QJsonObject& reviewer) {
+    const auto checked = checker.value(QStringLiteral("verdict")).toString();
+    const auto reviewed = reviewer.value(QStringLiteral("verdict")).toString();
+    if (checked == QStringLiteral("pass") && reviewed == QStringLiteral("pass"))
+        return QStringLiteral("通过（同模型角色检查，非独立验证；未修改原文）");
+    QStringList reasons;
+    for (const auto& pair : {qMakePair(QStringLiteral("审查员"), reviewer),
+                             qMakePair(QStringLiteral("复核员"), checker)}) {
+        for (const auto& value : pair.second.value(QStringLiteral("issues")).toArray()) {
+            reasons.append(pair.first + QStringLiteral("：") +
+                           value.toObject().value(QStringLiteral("reason")).toString().left(160));
+            if (reasons.size() >= 3)
+                break;
+        }
+        if (reasons.size() >= 3)
+            break;
+    }
+    return (reviewed == QStringLiteral("redo")
+                ? QStringLiteral("审查建议重做（模型意见，非程序失败）")
+                : QStringLiteral("待人工确认（模型意见存在分歧或需人工判断）")) +
+           QStringLiteral("\n") + reasons.join(QStringLiteral("；"));
+}
+
 ChapterAnalysisController::ChapterAnalysisController(QObject* parent) : QObject(parent) {}
 ChapterAnalysisController::~ChapterAnalysisController() {
     cancel();
@@ -117,7 +171,8 @@ bool ChapterAnalysisController::busy() const noexcept {
 }
 
 void ChapterAnalysisController::start(QString path, document::Document book, qsizetype chapterIndex,
-                                      ChapterPreview preview, AnalysisConnection connection) {
+                                      ChapterPreview preview, AnalysisConnection connection,
+                                      QString resumePipeline, bool allowLegacyEndpoint) {
     if (busy_) {
         return;
     }
@@ -156,14 +211,26 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
     connection_ = std::move(connection);
     outputs_.clear();
     role_ = 0;
+    reusedRunIds_.clear();
+    attemptSequence_ = 0;
     cancelled_ = false;
     persisted_ = false;
-    pipelineId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    executionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    pipelineId_ = resumePipeline.isEmpty() ? executionId_ : resumePipeline;
+    if (!resumePipeline.isEmpty()) {
+        const auto error = loadContinuation(resumePipeline, allowLegacyEndpoint);
+        if (!error.isEmpty()) {
+            stop(error);
+            return;
+        }
+    }
     client_ = std::make_unique<llm::QwenClient>(connection_.options);
     busy_ = true;
     emit busyChanged(true);
-    QTimer::singleShot(0, this, [this, pipeline = pipelineId_] {
-        if (pipelineId_ == pipeline) {
+    for (int pending = role_; pending < 3; ++pending)
+        emit roleChanged(pending, QStringLiteral("尚未运行"), QStringLiteral("—"), 0);
+    QTimer::singleShot(0, this, [this, execution = executionId_] {
+        if (executionId_ == execution) {
             nextRole();
         }
     });
@@ -178,6 +245,139 @@ bool ChapterAnalysisController::sourceUnchanged() const {
     return std::holds_alternative<ChapterPreview>(rebuilt) &&
            std::get<ChapterPreview>(rebuilt).snapshot.id == source_.snapshot.id &&
            std::get<ChapterPreview>(rebuilt).snapshot.content == source_.snapshot.content;
+}
+
+QString ChapterAnalysisController::loadContinuation(const QString& pipeline,
+                                                    bool allowLegacyEndpoint) {
+    const auto loaded = history(database_->filePath(), source_.snapshot.projectId);
+    if (!std::holds_alternative<QList<AnalysisHistoryEntry>>(loaded))
+        return QStringLiteral("历史读取失败，未续跑。");
+    const auto& entries = std::get<QList<AnalysisHistoryEntry>>(loaded);
+    const auto roles = latestPipelineRoles(entries, pipeline);
+    const auto prefix = completedRolePrefix(roles);
+    if (prefix < 1 || prefix >= 3)
+        return QStringLiteral("所选任务没有可继续的已完成前序角色，或三个角色均已完成；未发送。");
+    storage::InferenceRepository repository(*database_);
+    const auto& current = source_.snapshot.content;
+    const QStringList sourceFields{QStringLiteral("project_id"),
+                                   QStringLiteral("book_id"),
+                                   QStringLiteral("chapter_id"),
+                                   QStringLiteral("chapter_index"),
+                                   QStringLiteral("import_manifest_sha256"),
+                                   QStringLiteral("source_file_sha256"),
+                                   QStringLiteral("chapter_bytes_sha256"),
+                                   QStringLiteral("source"),
+                                   QStringLiteral("blocks")};
+    for (int role = 0; role < prefix; ++role) {
+        const auto& entry = *roles[role];
+        const auto& old = entry.context.content;
+        for (const auto& key : sourceFields) {
+            if (old.value(key) != current.value(key))
+                return QStringLiteral(
+                    "原文、章节或导入来源已变化；不能复用旧结果，请从头重新分析。");
+        }
+        const auto request = QJsonDocument::fromJson(entry.artifacts.rawRequest).object();
+        const auto expectedThinking = connection_.options.enableThinking;
+        const auto tokenField =
+            connection_.options.completionTokenParameter == llm::CompletionTokenParameter::MaxTokens
+                ? QStringLiteral("max_tokens")
+                : QStringLiteral("max_completion_tokens");
+        if (request.value(QStringLiteral("model")).toString() != connection_.options.defaultModel ||
+            request.value(QStringLiteral("response_format"))
+                    .toObject()
+                    .value(QStringLiteral("type"))
+                    .toString() != connection_.responseFormat ||
+            !request.contains(tokenField) ||
+            request.contains(QStringLiteral("enable_thinking")) != expectedThinking.has_value() ||
+            (expectedThinking &&
+             (!request.value(QStringLiteral("enable_thinking")).isBool() ||
+              request.value(QStringLiteral("enable_thinking")).toBool() != *expectedThinking)))
+            return QStringLiteral("模型、响应格式、思考模式或输出字段已变化；请恢复原配置后继续，或"
+                                  "从头重新分析。超时与预算可以调整。");
+        if (old.contains(QStringLiteral("api_endpoint"))) {
+            if (old.value(QStringLiteral("api_endpoint")).toString() !=
+                connection_.options.endpoint.toString())
+                return QStringLiteral("API 接口已变化，不能直接复用旧结果；未发送。");
+        } else if (!allowLegacyEndpoint)
+            return QStringLiteral("旧任务未记录接口地址，需明确确认使用当前接口后才能继续。");
+        const auto schema = repository.findOutputSchema(entry.artifacts.outputSchemaId,
+                                                        entry.artifacts.outputSchemaVersion);
+        const auto prompt = repository.findPromptVersion(entry.artifacts.promptTemplateId,
+                                                         entry.artifacts.promptVersion);
+        if (!std::holds_alternative<inference::OutputSchema>(schema) ||
+            !std::holds_alternative<inference::PromptVersion>(prompt))
+            return QStringLiteral("前序提示词或输出契约缺失；不能续跑。");
+        const auto expectedSchema = role == 0 ? source_.schema.schema : reviewSchema();
+        const auto expectedPromptId =
+            role == 0
+                ? source_.prompt.prompt.id
+                : core::PromptTemplateId::fromStableKey(QStringLiteral("markdown-chapter-checker"));
+        const auto expectedSchemaId =
+            role == 0
+                ? source_.schema.id
+                : core::OutputSchemaId::fromStableKey(QStringLiteral("markdown-chapter-review"));
+        if (entry.artifacts.promptTemplateId != expectedPromptId ||
+            entry.artifacts.promptVersion != source_.prompt.version ||
+            entry.artifacts.outputSchemaId != expectedSchemaId ||
+            entry.artifacts.outputSchemaVersion != source_.schema.version ||
+            std::get<inference::OutputSchema>(schema).schema != expectedSchema ||
+            std::get<inference::PromptVersion>(prompt).contentHash.toHex() !=
+                old.value(QStringLiteral("prompt_sha256")).toString().toLatin1() ||
+            (role == 0 &&
+             std::get<inference::PromptVersion>(prompt).contentHash != source_.prompt.contentHash))
+            return QStringLiteral("提示词或输出契约已变化；不能复用旧结果。");
+        const auto parsed = entry.artifacts.parsedResponse->object();
+        const auto messages = request.value(QStringLiteral("messages")).toArray();
+        if (messages.size() != 2 || messages != old.value(QStringLiteral("messages")).toArray() ||
+            messages[0].toObject().value(QStringLiteral("content")).toString() !=
+                std::get<inference::PromptVersion>(prompt).text)
+            return QStringLiteral("前序请求与已保存消息或提示词不一致；未发送。");
+        const auto user =
+            QJsonDocument::fromJson(
+                messages[1].toObject().value(QStringLiteral("content")).toString().toUtf8())
+                .object();
+        if (user.value(QStringLiteral("chapter_id")) !=
+                current.value(QStringLiteral("chapter_id")) ||
+            user.value(QStringLiteral("source")) != current.value(QStringLiteral("source")) ||
+            user.value(QStringLiteral("output_schema")).toObject() != expectedSchema)
+            return QStringLiteral("前序请求来源或输出契约与当前章不一致；未发送。");
+        if (!inference::OutputValidator::validate(expectedSchema, parsed).isValid())
+            return QStringLiteral("前序结果结构重新校验失败；未发送。");
+        if (!connection_.options.apiKey.isEmpty() &&
+            inference::canonicalJson(parsed).contains(connection_.options.apiKey))
+            return QStringLiteral("前序输出包含当前凭据，拒绝复用。");
+        const auto source = current.value(QStringLiteral("source")).toObject();
+        if (role == 0) {
+            const auto bytes = source.value(QStringLiteral("utf8")).toString().toUtf8();
+            const auto checked = narrative::ChapterAnalyzer::analyze(
+                book_.chapters[chapterIndex_].id,
+                {source.value(QStringLiteral("source_id")).toString(),
+                 source.value(QStringLiteral("start_byte")).toInteger(),
+                 source.value(QStringLiteral("end_byte")).toInteger()},
+                QByteArrayView(bytes), parsed);
+            if (!checked.errors.isEmpty())
+                return QStringLiteral("分析员结果的证据重新校验失败；未发送。");
+        } else {
+            if (user.value(QStringLiteral("analysis")).toObject() != outputs_.first() ||
+                !validateReview(parsed, source, book_.chapters[chapterIndex_].id.toString())
+                     .isEmpty())
+                return QStringLiteral("复核结果与分析员输出或证据不一致；未发送。");
+        }
+        outputs_.append(parsed);
+        reusedRunIds_.append(entry.run.id.toString());
+    }
+    for (const auto& entry : entries) {
+        if (entry.context.content.value(QStringLiteral("pipeline_id")).toString() == pipeline) {
+            const auto sequence =
+                entry.context.content.value(QStringLiteral("attempt_sequence"))
+                    .toInt(entry.context.content.value(QStringLiteral("role_index")).toInt());
+            if (sequence < 0 || sequence > 1000000000)
+                return QStringLiteral("历史请求序号无效；未发送。");
+            attemptSequence_ = qMax(attemptSequence_, sequence + 1);
+        }
+    }
+    role_ = prefix;
+    return {};
 }
 
 void ChapterAnalysisController::nextRole() {
@@ -244,6 +444,10 @@ void ChapterAnalysisController::nextRole() {
     content.remove(QStringLiteral("sent"));
     content.insert(QStringLiteral("source_snapshot_id"), source_.snapshot.id.toString());
     content.insert(QStringLiteral("pipeline_id"), pipelineId_);
+    content.insert(QStringLiteral("execution_id"), executionId_);
+    content.insert(QStringLiteral("attempt_sequence"), attemptSequence_++);
+    content.insert(QStringLiteral("reused_run_ids"), QJsonArray::fromStringList(reusedRunIds_));
+    content.insert(QStringLiteral("api_endpoint"), connection_.options.endpoint.toString());
     content.insert(QStringLiteral("role_index"), role_);
     content.insert(QStringLiteral("model"), connection_.options.defaultModel);
     content.insert(QStringLiteral("response_format"), connection_.responseFormat);
@@ -285,7 +489,7 @@ void ChapterAnalysisController::nextRole() {
     }
     content.insert(QStringLiteral("estimated_input_tokens"), static_cast<qint64>(estimate));
     rolePreview_.snapshot = inference::makeContextSnapshot(
-        core::ContextSnapshotId::fromStableKey(pipelineId_ + QString::number(role_)),
+        core::ContextSnapshotId::fromStableKey(executionId_ + QString::number(role_)),
         source_.snapshot.projectId, content, QDateTime::currentDateTimeUtc());
     auto saved = ChapterPreviewBuilder::store(*database_, rolePreview_);
     if (const auto* error = std::get_if<storage::StorageError>(&saved)) {
@@ -294,7 +498,7 @@ void ChapterAnalysisController::nextRole() {
     }
     rolePreview_ = std::get<ChapterPreview>(std::move(saved));
     run_ = {};
-    run_.id = core::LLMRunId::fromStableKey(pipelineId_ + QString::number(role_));
+    run_.id = core::LLMRunId::fromStableKey(executionId_ + QString::number(role_));
     run_.projectId = source_.snapshot.projectId;
     run_.provider = QStringLiteral("qwen-lan");
     run_.model = connection_.options.defaultModel;
@@ -303,9 +507,9 @@ void ChapterAnalysisController::nextRole() {
     persisted_ = false;
     const QPointer<ChapterAnalysisController> guard(this);
     requestId_ = client_->enqueue(
-        request, [guard, pipeline = pipelineId_](const QUuid& id, llm::LLMResult result) {
+        request, [guard, execution = executionId_](const QUuid& id, llm::LLMResult result) {
             if (guard && !guard->closing_ && guard->persisted_ && guard->busy_ &&
-                guard->pipelineId_ == pipeline && guard->requestId_ == id) {
+                guard->executionId_ == execution && guard->requestId_ == id) {
                 guard->complete(std::move(result));
             }
         });
@@ -469,14 +673,14 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         stop(QStringLiteral("结果保存失败，不能标记成功：") + status->message);
         return;
     }
-    emit roleChanged(role_,
-                     errors.isEmpty() ? QStringLiteral("校验通过") : QStringLiteral("失败/取消"),
-                     usageKnown ? QStringLiteral("输入 %1 / 输出 %2 / 总计 %3")
-                                      .arg(run_.promptTokens)
-                                      .arg(run_.completionTokens)
-                                      .arg(run_.totalTokens)
-                                : QStringLiteral("用量未知"),
-                     *run_.latencyMs);
+    emit roleChanged(
+        role_, errors.isEmpty() ? QStringLiteral("输出校验通过") : QStringLiteral("失败/取消"),
+        usageKnown ? QStringLiteral("输入 %1 / 输出 %2 / 总计 %3")
+                         .arg(run_.promptTokens)
+                         .arg(run_.completionTokens)
+                         .arg(run_.totalTokens)
+                   : QStringLiteral("用量未知"),
+        *run_.latencyMs);
     if (!errors.isEmpty()) {
         stop(run_.errorMessage, cancelled_ ? TaskState::Cancelled : TaskState::Failed);
         return;
@@ -487,8 +691,8 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     outputs_.append(parsed);
     ++role_;
     if (role_ < 3) {
-        QTimer::singleShot(0, this, [this, pipeline = pipelineId_] {
-            if (pipelineId_ == pipeline) {
+        QTimer::singleShot(0, this, [this, execution = executionId_] {
+            if (executionId_ == execution) {
                 nextRole();
             }
         });
@@ -496,12 +700,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     }
     const auto checker = outputs_[1].value(QStringLiteral("verdict")).toString();
     const auto reviewer = outputs_[2].value(QStringLiteral("verdict")).toString();
-    const auto conclusion =
-        reviewer == QStringLiteral("redo")
-            ? QStringLiteral("需重做")
-            : (checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
-                   ? QStringLiteral("通过（同模型角色检查，非独立验证）")
-                   : QStringLiteral("待人工确认"));
+    const auto conclusion = reviewConclusion(outputs_[1], outputs_[2]);
     stop(conclusion, checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
                          ? TaskState::Success
                          : TaskState::Attention);

@@ -133,10 +133,15 @@ void TaskIndicator::refresh() {
     lamp_->setEnabled(state_ == TaskState::Failed);
     lamp_->setAccessibleName(state_ == TaskState::Failed ? tr("失败：点击确认并恢复就绪")
                                                          : display);
+    const auto tooltip =
+        QStringLiteral("<qt>") +
+        display.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")) +
+        QStringLiteral("</qt>");
     lamp_->setToolTip(state_ == TaskState::Failed ? tr("点击恢复就绪；不会删除错误记录或重试任务。")
-                                                  : display);
-    label_->setText(display);
-    label_->setToolTip(display);
+                                                  : tooltip);
+    // Keep the status bar on one line; full review reasons remain in the page and tooltip.
+    label_->setText(display.simplified());
+    label_->setToolTip(tooltip);
     if (running)
         timer_->start();
     else

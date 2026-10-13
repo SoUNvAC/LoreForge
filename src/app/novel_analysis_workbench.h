@@ -36,6 +36,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void chapterSelected(int index);
     void chapterPreviewRequested(int maximumTokens, int reservedTokens);
     void analysisRequested();
+    void continuationRequested(QString pipelineId, bool allowLegacyEndpoint);
     void cancellationRequested();
     void metricsChanged(QString summary);
 
@@ -43,11 +44,16 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showHistoryEntry(int index);
     void renderAnalysis(const QJsonObject& output, const QJsonObject& source);
     void updateButtons();
+    void confirmAndStart(bool continuing);
     QComboBox* chapters_ = nullptr;
     QSpinBox* contextLimit_ = nullptr;
     QSpinBox* outputBudget_ = nullptr;
     QPushButton* prepare_ = nullptr;
     QPushButton* analyze_ = nullptr;
+    QPushButton* resume_ = nullptr;
+    QString resumePipeline_;
+    int resumePrefix_ = 0;
+    bool legacyEndpoint_ = false;
     QPushButton* cancel_ = nullptr;
     QLabel* previewStatus_ = nullptr;
     QLabel* taskStatus_ = nullptr;

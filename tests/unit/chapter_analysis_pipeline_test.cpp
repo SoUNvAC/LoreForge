@@ -5,6 +5,7 @@
 
 #include "loreforge/parser/markdown_source_parser.h"
 #include "loreforge/storage/book_repository.h"
+#include "loreforge/storage/inference_repository.h"
 #include "loreforge/storage/project_repository.h"
 
 #include <QCheckBox>
@@ -25,6 +26,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QtTest>
+#include <algorithm>
 
 namespace {
 using namespace loreforge;
@@ -249,7 +251,270 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void closingTheWindowCancelsThePendingRun();
     void persistsSafeDiagnosticsAndKnownUsageForInvalidResponses();
     void doesNotStoreReasoningInSuccessfulArtifacts();
+    void continuesOnlyUnfinishedRoles_data();
+    void continuesOnlyUnfinishedRoles();
+    void refusesIncompatibleContinuation();
+    void confirmsContinuationAndShowsReviewReasons();
+    void validatesLegacyAndCorruptPrerequisites();
 };
+
+void ChapterAnalysisPipelineTest::continuesOnlyUnfinishedRoles_data() {
+    QTest::addColumn<int>("failedRole");
+    QTest::newRow("checker") << 1;
+    QTest::newRow("reviewer") << 2;
+}
+
+void ChapterAnalysisPipelineTest::continuesOnlyUnfinishedRoles() {
+    QFETCH(int, failedRole);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.makeOutput = [&](const QJsonObject& user, int index) {
+        if (index == failedRole)
+            server.status = 500;
+        return index == 0 ? analysisFor(user) : reviewFor(user);
+    };
+    QString pipeline;
+    QList<app::AnalysisHistoryEntry> original;
+    {
+        Controller initial;
+        QSignalSpy finished(&initial, &Controller::finished);
+        initial.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+        QTRY_COMPARE(finished.size(), 1);
+        original = history(fixture);
+        QCOMPARE(original.size(), failedRole + 1);
+        pipeline = original[0].context.content.value(QStringLiteral("pipeline_id")).toString();
+    }
+    server.status = 200;
+    server.makeOutput = {};
+    // A new controller simulates reopening the project; budgets and timeout may change.
+    auto opened = Database::open(fixture.path);
+    auto database = std::get<std::unique_ptr<Database>>(std::move(opened));
+    auto built = app::ChapterPreviewBuilder::build(fixture.projectId, fixture.book, 0, 65536, 8192);
+    auto stored =
+        app::ChapterPreviewBuilder::store(*database, std::get<app::ChapterPreview>(built));
+    auto preview = std::get<app::ChapterPreview>(stored);
+    database.reset();
+    auto connection = server.connection();
+    connection.timeoutMs = 6000;
+    Controller resumed;
+    QSignalSpy finished(&resumed, &Controller::finished);
+    resumed.start(fixture.path, fixture.book, 0, preview, connection, pipeline);
+    resumed.cancel();
+    QCOMPARE(finished.size(), 1);
+    resumed.start(fixture.path, fixture.book, 0, preview, connection, pipeline);
+    QTRY_COMPARE(finished.size(), 2);
+    QVERIFY2(finished.last()[0].toString().contains(QStringLiteral("通过")),
+             qPrintable(finished.last()[0].toString()));
+    QCOMPARE(server.requests.size(), 4);
+    const auto entries = history(fixture);
+    QCOMPARE(entries.size(), 4);
+    const auto roles = app::latestPipelineRoles(entries, pipeline);
+    QCOMPARE(app::completedRolePrefix(roles), 3);
+    for (const auto& old : original) {
+        const auto found = std::find_if(entries.begin(), entries.end(), [&](const auto& entry) {
+            return entry.run.id == old.run.id;
+        });
+        QVERIFY(found != entries.end());
+        QCOMPARE(found->run, old.run);
+        QCOMPARE(found->artifacts, old.artifacts);
+        QCOMPARE(found->outcome, old.outcome);
+    }
+    for (int role = failedRole; role < 3; ++role) {
+        QCOMPARE(
+            roles[role]->context.content.value(QStringLiteral("reused_run_ids")).toArray().size(),
+            failedRole);
+        QCOMPARE(roles[role]->run.status, storage::LLMRunStatus::Succeeded);
+    }
+    QVERIFY(server.requests[failedRole + 1]
+                .value(QStringLiteral("messages"))
+                .toArray()[1]
+                .toObject()
+                .value(QStringLiteral("content"))
+                .toString()
+                .contains(QStringLiteral("analysis")));
+    resumed.start(fixture.path, fixture.book, 0, preview, connection, pipeline);
+    QTRY_COMPARE(finished.size(), 3);
+    QCOMPARE(server.requests.size(), 4);
+}
+
+void ChapterAnalysisPipelineTest::refusesIncompatibleContinuation() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.makeOutput = [&](const QJsonObject& user, int index) {
+        if (index == 1)
+            server.status = 500;
+        return index == 0 ? analysisFor(user) : reviewFor(user);
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    const auto pipeline =
+        history(fixture)[0].context.content.value(QStringLiteral("pipeline_id")).toString();
+    server.status = 200;
+    server.makeOutput = {};
+    for (int mode = 0; mode < 4; ++mode) {
+        auto connection = server.connection();
+        if (mode == 0)
+            connection.options.defaultModel = QStringLiteral("different-model");
+        if (mode == 1)
+            connection.options.enableThinking = false;
+        if (mode == 2)
+            connection.responseFormat = QStringLiteral("json_schema");
+        if (mode == 3)
+            connection.options.endpoint.setPath(QStringLiteral("/different"));
+        controller.start(fixture.path, fixture.book, 0, fixture.preview, connection, pipeline);
+        QTRY_COMPARE(finished.size(), mode + 2);
+        QCOMPARE(server.requests.size(), 2);
+    }
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
+                     QStringLiteral("missing-pipeline"));
+    QCOMPARE(finished.size(), 6);
+    QCOMPARE(server.requests.size(), 2);
+    QVERIFY(test::writeMarkdownFixtureFile(fixture.source.path(), QStringLiteral("02/010.md"),
+                                           test::markdownFixtureChapter() + QByteArray("\n")));
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(), pipeline);
+    QTRY_COMPARE(finished.size(), 7);
+    QCOMPARE(server.requests.size(), 2);
+}
+
+void ChapterAnalysisPipelineTest::confirmsContinuationAndShowsReviewReasons() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.makeOutput = [&](const QJsonObject& user, int index) {
+        if (index == 2)
+            server.status = 500;
+        return index == 0 ? analysisFor(user) : reviewFor(user);
+    };
+    {
+        Controller controller;
+        QSignalSpy finished(&controller, &Controller::finished);
+        controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+        QTRY_COMPARE(finished.size(), 1);
+    }
+    app::MainWindow window;
+    QVERIFY(window.openProjectFile(fixture.path));
+    window.findChild<QLineEdit*>(QStringLiteral("llmEndpoint"))
+        ->setText(server.connection().options.endpoint.toString());
+    window.findChild<QLineEdit*>(QStringLiteral("llmModelId"))
+        ->setText(QStringLiteral("fixture-model"));
+    window.findChild<QCheckBox*>(QStringLiteral("llmAllowHttp"))->setChecked(true);
+    auto* resume = window.findChild<QPushButton*>(QStringLiteral("analysisContinueTask"));
+    QVERIFY(!resume->isHidden());
+    QCOMPARE(resume->text(), QStringLiteral("继续审查"));
+    const auto capture = [&](const QString& suffix) {
+        const auto base = qEnvironmentVariable("LOREFORGE_CONTINUATION_PREVIEW_IMAGE");
+        if (base.isEmpty())
+            return true;
+        const auto font =
+            QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc"));
+        const auto families = QFontDatabase::applicationFontFamilies(font);
+        if (!families.isEmpty())
+            window.setFont(QFont(families.first(), 10));
+        window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->setCurrentIndex(2);
+        window.resize(1400, 1100);
+        window.show();
+        QTest::qWait(30);
+        return window.grab().save(base + suffix + QStringLiteral(".png"));
+    };
+    QVERIFY(capture(QStringLiteral("-ready")));
+    QTimer::singleShot(0, &window, [&] {
+        window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation"))->reject();
+    });
+    resume->click();
+    QCOMPARE(server.requests.size(), 3);
+    server.status = 200;
+    server.makeOutput = [](const QJsonObject& user, int) {
+        return reviewFor(user, QStringLiteral("redo"));
+    };
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation"));
+        QVERIFY(dialog->text().contains(QStringLiteral("最多 1 次新请求")));
+        dialog->findChild<QPushButton*>(QStringLiteral("analysisConfirmSend"))->click();
+    });
+    resume->click();
+    auto* status = window.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"));
+    QTRY_VERIFY(status->text().contains(QStringLiteral("审查建议重做")));
+    QVERIFY(status->text().contains(QStringLiteral("这项结论需再核对")));
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("taskStatusText"))
+                ->text()
+                .contains(QStringLiteral("审查建议重做")));
+    QVERIFY(resume->isHidden());
+    QCOMPARE(server.requests.size(), 4);
+    QCOMPARE(window.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"))->text(),
+             QStringLiteral("从头重新分析"));
+    QVERIFY(capture(QStringLiteral("-review")));
+}
+
+void ChapterAnalysisPipelineTest::validatesLegacyAndCorruptPrerequisites() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.makeOutput = [&](const QJsonObject& user, int index) {
+        if (index == 1)
+            server.status = 500;
+        return index == 0 ? analysisFor(user) : reviewFor(user);
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    const auto original = history(fixture)[0];
+    const auto addLegacy = [&](const QString& pipeline, bool corrupt) {
+        auto opened = Database::open(fixture.path);
+        auto database = std::get<std::unique_ptr<Database>>(std::move(opened));
+        storage::InferenceRepository repository(*database);
+        storage::LLMRunRepository runs(*database);
+        auto content = original.context.content;
+        content.remove(QStringLiteral("api_endpoint"));
+        content.remove(QStringLiteral("attempt_sequence"));
+        content.insert(QStringLiteral("pipeline_id"), pipeline);
+        auto snapshot = inference::makeContextSnapshot(
+            core::ContextSnapshotId::fromStableKey(pipeline), fixture.projectId, content,
+            QDateTime::currentDateTimeUtc());
+        auto run = original.run;
+        run.id = core::LLMRunId::fromStableKey(pipeline);
+        run.requestId = QUuid::createUuid();
+        run.startedAt = QDateTime::currentDateTimeUtc();
+        run.completedAt = run.startedAt;
+        auto artifacts = original.artifacts;
+        artifacts.runId = run.id;
+        artifacts.contextSnapshotId = snapshot.id;
+        artifacts.rawResponse.reset();
+        artifacts.parsedResponse.reset();
+        artifacts.validation = {inference::ValidationStatus::Pending, {}};
+        auto output = original.artifacts.parsedResponse->object();
+        if (corrupt)
+            output.insert(QStringLiteral("chapter_id"), QStringLiteral("wrong-chapter"));
+        return !repository.saveContextSnapshot(snapshot) && !runs.save(run) &&
+               !repository.createRunArtifacts(artifacts) &&
+               !repository.finalizeRunArtifacts(run.id, original.artifacts.rawResponse,
+                                                QJsonDocument(output),
+                                                {inference::ValidationStatus::Valid, {}});
+    };
+    QVERIFY(addLegacy(QStringLiteral("legacy-pipeline"), false));
+    QVERIFY(addLegacy(QStringLiteral("corrupt-pipeline"), true));
+    server.status = 200;
+    server.makeOutput = {};
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
+                     QStringLiteral("legacy-pipeline"));
+    QCOMPARE(finished.size(), 2);
+    QVERIFY(finished.last()[0].toString().contains(QStringLiteral("接口地址")));
+    QCOMPARE(server.requests.size(), 2);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
+                     QStringLiteral("corrupt-pipeline"), true);
+    QCOMPARE(finished.size(), 3);
+    QCOMPARE(server.requests.size(), 2);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(),
+                     QStringLiteral("legacy-pipeline"), true);
+    QTRY_COMPARE(finished.size(), 4);
+    QVERIFY2(finished.last()[0].toString().contains(QStringLiteral("通过")),
+             qPrintable(finished.last()[0].toString()));
+    QCOMPARE(server.requests.size(), 4);
+}
 
 void ChapterAnalysisPipelineTest::persistsSafeDiagnosticsAndKnownUsageForInvalidResponses() {
     Fixture fixture;
@@ -412,7 +677,8 @@ void ChapterAnalysisPipelineTest::handlesDisagreementWithoutAutomaticApproval() 
     controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
     QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 5000);
     QCOMPARE(server.requests.size(), 3);
-    QCOMPARE(finished[0][0].toString(), QStringLiteral("待人工确认"));
+    QVERIFY(finished[0][0].toString().contains(QStringLiteral("待人工确认")));
+    QVERIFY(finished[0][0].toString().contains(QStringLiteral("这项结论需再核对")));
 }
 
 void ChapterAnalysisPipelineTest::cancelsAndDoesNotRetryFailures() {

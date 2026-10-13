@@ -7,6 +7,7 @@
 #include "task_indicator.h"
 
 #include <QObject>
+#include <array>
 
 namespace loreforge::app {
 
@@ -16,6 +17,11 @@ struct AnalysisHistoryEntry final {
     inference::LLMRunArtifacts artifacts;
     QJsonObject outcome;
 };
+using PipelineRoles = std::array<const AnalysisHistoryEntry*, 3>;
+[[nodiscard]] PipelineRoles latestPipelineRoles(const QList<AnalysisHistoryEntry>& history,
+                                                const QString& pipeline);
+[[nodiscard]] int completedRolePrefix(const PipelineRoles& roles);
+[[nodiscard]] QString reviewConclusion(const QJsonObject& checker, const QJsonObject& reviewer);
 
 class ChapterAnalysisController final : public QObject {
     Q_OBJECT
@@ -24,7 +30,8 @@ class ChapterAnalysisController final : public QObject {
     ~ChapterAnalysisController() override;
     [[nodiscard]] bool busy() const noexcept;
     void start(QString databasePath, document::Document book, qsizetype chapterIndex,
-               ChapterPreview preview, AnalysisConnection connection);
+               ChapterPreview preview, AnalysisConnection connection, QString resumePipeline = {},
+               bool allowLegacyEndpoint = false);
     void cancel();
     [[nodiscard]] static storage::StorageResult<QList<AnalysisHistoryEntry>>
     history(QStringView databasePath, const core::ProjectId& projectId);
@@ -40,6 +47,7 @@ class ChapterAnalysisController final : public QObject {
     void complete(llm::LLMResult result);
     void stop(QString message, TaskState state = TaskState::Failed);
     [[nodiscard]] bool sourceUnchanged() const;
+    QString loadContinuation(const QString& pipeline, bool allowLegacyEndpoint);
     std::unique_ptr<storage::ProjectDatabase> database_;
     std::unique_ptr<llm::QwenClient> client_;
     document::Document book_;
@@ -50,6 +58,9 @@ class ChapterAnalysisController final : public QObject {
     QList<QJsonObject> outputs_;
     storage::LLMRunRecord run_;
     QString pipelineId_;
+    QString executionId_;
+    QStringList reusedRunIds_;
+    int attemptSequence_ = 0;
     QUuid requestId_;
     int role_ = 0;
     bool busy_ = false;

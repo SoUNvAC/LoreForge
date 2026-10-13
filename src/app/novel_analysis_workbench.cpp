@@ -20,6 +20,15 @@
 
 namespace loreforge::app {
 namespace {
+QString verdictText(const QString& value) {
+    if (value == QStringLiteral("pass"))
+        return NovelAnalysisWorkbench::tr("通过");
+    if (value == QStringLiteral("redo"))
+        return NovelAnalysisWorkbench::tr("建议重做");
+    if (value == QStringLiteral("human"))
+        return NovelAnalysisWorkbench::tr("需人工判断");
+    return NovelAnalysisWorkbench::tr("未知");
+}
 void attachEvidence(QTreeWidgetItem* item, const QByteArray& bytes, qint64 base, qint64 start,
                     qint64 end) {
     item->setData(0, Qt::UserRole, QString::fromUtf8(bytes.mid(start - base, end - start)));
@@ -70,11 +79,14 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     auto* buttons = new QHBoxLayout;
     prepare_ = new QPushButton(tr("仅预览原文与请求（可选）"), this);
     prepare_->setObjectName(QStringLiteral("llmPrepareChapterPreview"));
-    analyze_ = new QPushButton(tr("开始单章分析"), this);
+    analyze_ = new QPushButton(tr("从头重新分析"), this);
     analyze_->setObjectName(QStringLiteral("llmAnalyzeChapter"));
+    resume_ = new QPushButton(tr("继续复核与审查"), this);
+    resume_->setObjectName(QStringLiteral("analysisContinueTask"));
     cancel_ = new QPushButton(tr("取消任务"), this);
     cancel_->setObjectName(QStringLiteral("analysisCancelTask"));
     buttons->addWidget(analyze_);
+    buttons->addWidget(resume_);
     buttons->addWidget(prepare_);
     buttons->addWidget(cancel_);
     layout->addLayout(buttons);
@@ -187,54 +199,80 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     connect(cancel_, &QPushButton::clicked, this, &NovelAnalysisWorkbench::cancellationRequested);
     connect(historyList_, &QListWidget::currentRowChanged, this,
             &NovelAnalysisWorkbench::showHistoryEntry);
-    connect(analyze_, &QPushButton::clicked, this, [this] {
-        if (busy_ || !available_) {
-            return;
-        }
-        if (connectionValidator_) {
-            const auto error = connectionValidator_();
-            if (!error.isEmpty()) {
-                showError(error);
-                return;
-            }
-        }
-        // Preparation is local and synchronous; every start rechecks current source.
-        emit chapterPreviewRequested(contextLimit_->value(), outputBudget_->value());
-        if (!preview_)
-            return;
-        const auto id = preview_->snapshot.id;
-        QMessageBox dialog(
-            QMessageBox::Question, tr("确认发送本章"),
-            tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
-                tr("将当前章原文发送到以上 API，并最多串行运行分析、复核、审查三次。\n"
-                   "后续角色会收到本章原文和前一步输出；不包含其他章节，不自动重试、不自动改写。\n"
-                   "请求和结果将保存到项目，可能包含小说原文。确认继续？"),
-            QMessageBox::NoButton, this);
-        dialog.setObjectName(QStringLiteral("analysisSendConfirmation"));
-        dialog.setTextFormat(Qt::PlainText);
-        auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
-        confirm->setObjectName(QStringLiteral("analysisConfirmSend"));
-        auto* cancel = dialog.addButton(tr("取消"), QMessageBox::RejectRole);
-        dialog.setDefaultButton(cancel);
-        dialog.setEscapeButton(cancel);
-        dialog.exec();
-        if (dialog.clickedButton() == confirm && preview_ && preview_->snapshot.id == id &&
-            !busy_) {
-            emit analysisRequested();
-        }
-    });
+    connect(analyze_, &QPushButton::clicked, this, [this] { confirmAndStart(false); });
+    connect(resume_, &QPushButton::clicked, this, [this] { confirmAndStart(true); });
     updateButtons();
+}
+
+void NovelAnalysisWorkbench::confirmAndStart(bool continuing) {
+    if (busy_ || !available_) {
+        return;
+    }
+    const auto pipeline = resumePipeline_;
+    const auto prefix = resumePrefix_;
+    if (continuing && (pipeline.isEmpty() || prefix < 1 || prefix > 2))
+        return;
+    if (connectionValidator_) {
+        const auto error = connectionValidator_();
+        if (!error.isEmpty()) {
+            showError(error);
+            return;
+        }
+    }
+    // Preparation is local and synchronous; every start rechecks current source.
+    emit chapterPreviewRequested(contextLimit_->value(), outputBudget_->value());
+    if (!preview_)
+        return;
+    const auto id = preview_->snapshot.id;
+    QMessageBox dialog(
+        QMessageBox::Question, tr("确认发送本章"),
+        tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
+            (continuing
+                 ? tr("复用：%1\n即将运行：%2（最多 %3 "
+                      "次新请求）。\n继续前会重新核验原文、配置及前序结果。\n")
+                       .arg(prefix == 1 ? tr("分析员结果") : tr("分析员与复核员结果"),
+                            prefix == 1 ? tr("复核员 → 审查员") : tr("审查员"))
+                       .arg(3 - prefix)
+                 : tr("从分析员重新开始，最多串行运行分析、复核、审查三次，不复用历史结果。\n")) +
+            (continuing && legacyEndpoint_
+                 ? tr("注意：旧任务未记录接口地址，无法核对旧地址。本次明确使用上方当前接口。\n")
+                 : QString{}) +
+            tr("将当前章原文发送到以上 API。\n"
+               "后续角色会收到本章原文和前一步输出；不包含其他章节，不自动重试、不自动改写。\n"
+               "旧请求可能仍在远端运行；本次会产生新的用量。\n"
+               "请求和结果将保存到项目，不覆盖历史。确认继续？"),
+        QMessageBox::NoButton, this);
+    dialog.setObjectName(QStringLiteral("analysisSendConfirmation"));
+    dialog.setTextFormat(Qt::PlainText);
+    auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
+    confirm->setObjectName(QStringLiteral("analysisConfirmSend"));
+    auto* cancel = dialog.addButton(tr("取消"), QMessageBox::RejectRole);
+    dialog.setDefaultButton(cancel);
+    dialog.setEscapeButton(cancel);
+    dialog.exec();
+    if (dialog.clickedButton() == confirm && preview_ && preview_->snapshot.id == id && !busy_) {
+        if (continuing) {
+            if (resumePipeline_ == pipeline && resumePrefix_ == prefix)
+                emit continuationRequested(pipeline, legacyEndpoint_);
+        } else
+            emit analysisRequested();
+    }
 }
 
 void NovelAnalysisWorkbench::updateButtons() {
     prepare_->setEnabled(available_ && !busy_);
     analyze_->setEnabled(available_ && !busy_);
+    resume_->setVisible(resumePrefix_ == 1 || resumePrefix_ == 2);
+    resume_->setEnabled(available_ && !busy_ && (resumePrefix_ == 1 || resumePrefix_ == 2));
+    resume_->setText(resumePrefix_ == 2 ? tr("继续审查") : tr("继续复核与审查"));
     cancel_->setEnabled(busy_);
     chapters_->setEnabled(!busy_);
     contextLimit_->setEnabled(!busy_);
     outputBudget_->setEnabled(!busy_);
 }
 void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsizetype index) {
+    resumePipeline_.clear();
+    resumePrefix_ = 0;
     const QSignalBlocker blocker(chapters_);
     chapters_->clear();
     chapterId_.clear();
@@ -333,6 +371,9 @@ const std::optional<ChapterPreview>& NovelAnalysisWorkbench::preview() const noe
 }
 
 void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QString chapterId) {
+    resumePipeline_.clear();
+    resumePrefix_ = 0;
+    updateButtons();
     history_.clear();
     historyList_->clear();
     qint64 projectTokens = 0, chapterTokens = 0;
@@ -357,7 +398,7 @@ void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QS
         history_.append(entry);
         const auto role = entry.context.content.value(QStringLiteral("role_index")).toInt();
         const auto status = entry.run.status == storage::LLMRunStatus::Succeeded
-                                ? tr("已校验")
+                                ? tr("输出校验通过")
                                 : (entry.run.status == storage::LLMRunStatus::Failed
                                        ? tr("失败")
                                        : (entry.run.status == storage::LLMRunStatus::Cancelled
@@ -406,22 +447,18 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
              ? QLatin1Char('\n') + QString::fromUtf8(entry.artifacts.parsedResponse->toJson())
              : QString{}));
     const auto pipeline = entry.context.content.value(QStringLiteral("pipeline_id")).toString();
-    const AnalysisHistoryEntry* analyzer = nullptr;
-    const AnalysisHistoryEntry* checker = nullptr;
-    const AnalysisHistoryEntry* reviewer = nullptr;
-    for (const auto& candidate : history_) {
-        if (candidate.context.content.value(QStringLiteral("pipeline_id")).toString() != pipeline) {
-            continue;
-        }
-        const auto role = candidate.context.content.value(QStringLiteral("role_index")).toInt();
-        if (role == 0) {
-            analyzer = &candidate;
-        } else if (role == 1) {
-            checker = &candidate;
-        } else {
-            reviewer = &candidate;
-        }
+    const auto roles = latestPipelineRoles(history_, pipeline);
+    const auto* analyzer = roles[0];
+    const auto* checker = roles[1];
+    const auto* reviewer = roles[2];
+    resumePipeline_ = pipeline;
+    resumePrefix_ = completedRolePrefix(roles);
+    legacyEndpoint_ = false;
+    for (int role = 0; role < resumePrefix_; ++role) {
+        legacyEndpoint_ = legacyEndpoint_ ||
+                          !roles[role]->context.content.contains(QStringLiteral("api_endpoint"));
     }
+    updateButtons();
     for (auto* tree : results_) {
         tree->clear();
     }
@@ -430,17 +467,12 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         renderAnalysis(analyzer->artifacts.parsedResponse->object(), displayedSource_);
     }
     const auto good = [](const AnalysisHistoryEntry* value) {
-        return value && value->run.status == storage::LLMRunStatus::Succeeded;
+        return value && value->run.status == storage::LLMRunStatus::Succeeded &&
+               value->artifacts.parsedResponse && value->artifacts.validation.isValid();
     };
     if (good(analyzer) && good(checker) && good(reviewer)) {
-        const auto checked = checker->outcome.value(QStringLiteral("verdict")).toString();
-        const auto reviewed = reviewer->outcome.value(QStringLiteral("verdict")).toString();
-        taskStatus_->setText(
-            reviewed == QStringLiteral("redo")
-                ? tr("需重做")
-                : (checked == QStringLiteral("pass") && reviewed == QStringLiteral("pass")
-                       ? tr("通过（同模型角色检查，非独立验证；没有修改原文）")
-                       : tr("待人工确认")));
+        taskStatus_->setText(reviewConclusion(checker->artifacts.parsedResponse->object(),
+                                              reviewer->artifacts.parsedResponse->object()));
     } else {
         taskStatus_->setText(tr("历史任务未完成或失败；已校验分析仅为候选，尚未最终通过。"));
     }
@@ -453,9 +485,10 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         const auto role = review->context.content.value(QStringLiteral("role_index")).toInt();
         const auto output = review->artifacts.parsedResponse->object();
         auto* parent = new QTreeWidgetItem(
-            results_.last(), {tr("%1：%2").arg(role == 1 ? tr("复核员") : tr("LLM 审查员"),
-                                               output.value(QStringLiteral("verdict")).toString()),
-                              tr("同模型角色意见")});
+            results_.last(),
+            {tr("%1：%2").arg(role == 1 ? tr("复核员") : tr("LLM 审查员"),
+                              verdictText(output.value(QStringLiteral("verdict")).toString())),
+             tr("同模型角色意见")});
         for (const auto& value : output.value(QStringLiteral("issues")).toArray()) {
             const auto issue = value.toObject();
             const auto start = issue.value(QStringLiteral("source_start")).toInteger(-1);
@@ -470,6 +503,8 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         }
         parent->setExpanded(true);
     }
+    for (int role = 0; role < 3; ++role)
+        updateRole(role, tr("尚未运行"), QStringLiteral("—"), 0);
     for (const auto* roleEntry : {analyzer, checker, reviewer}) {
         if (!roleEntry) {
             continue;
@@ -478,9 +513,11 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
             roleEntry->context.content.value(QStringLiteral("role_index")).toInt(),
             good(roleEntry)
                 ? (roleEntry->context.content.value(QStringLiteral("role_index")).toInt() == 0
-                       ? tr("已校验")
-                       : tr("已校验：%1")
-                             .arg(roleEntry->outcome.value(QStringLiteral("verdict")).toString()))
+                       ? tr("输出校验通过")
+                       : tr("输出校验通过；内容意见：%1")
+                             .arg(verdictText(roleEntry->artifacts.parsedResponse->object()
+                                                  .value(QStringLiteral("verdict"))
+                                                  .toString())))
                 : tr("失败/取消/未完成"),
             roleEntry->outcome.value(QStringLiteral("usage_known")).toBool()
                 ? QString::number(roleEntry->run.totalTokens)
