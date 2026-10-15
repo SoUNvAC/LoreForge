@@ -2,6 +2,7 @@
 #include "main_window.h"
 #include "markdown_source_fixture.h"
 #include "novel_analysis_workbench.h"
+#include "stream_monitor_widget.h"
 
 #include "loreforge/parser/markdown_source_parser.h"
 #include "loreforge/storage/book_repository.h"
@@ -181,14 +182,47 @@ class Server final : public QObject {
                         choices[0] = choice;
                         response.insert(QStringLiteral("choices"), choices);
                     }
-                    const auto body =
+                    auto body =
                         !responseOverride.isNull() ? responseOverride
                         : status == 200
                             ? QJsonDocument(response).toJson(QJsonDocument::Compact)
                             : QByteArray(
                                   "{\"error\":{\"message\":\"credential-must-not-persist\"}}");
+                    const bool sse = streaming && status == 200 && responseOverride.isNull() &&
+                                     request.value(QStringLiteral("stream")).toBool();
+                    if (sse) {
+                        const auto delta = [](const QJsonObject& value,
+                                              QJsonValue finish = QJsonValue()) {
+                            return QByteArray("data: ") +
+                                   QJsonDocument(QJsonObject{{QStringLiteral("choices"),
+                                                              QJsonArray{QJsonObject{
+                                                                  {QStringLiteral("index"), 0},
+                                                                  {QStringLiteral("delta"), value},
+                                                                  {QStringLiteral("finish_reason"),
+                                                                   finish}}}}})
+                                       .toJson(QJsonDocument::Compact) +
+                                   "\n\n";
+                        };
+                        const auto content =
+                            QString::fromUtf8(QJsonDocument(output).toJson(QJsonDocument::Compact));
+                        body =
+                            delta({{QStringLiteral("content"), content.first(content.size() / 2)}});
+                        if (withReasoning)
+                            body += delta({{QStringLiteral("reasoning_content"),
+                                            QStringLiteral("private-thinking-must-not-persist")}});
+                        body += delta(
+                            {{QStringLiteral("content"), content.sliced(content.size() / 2)}});
+                        body += delta({}, finishReason);
+                        if (withUsage)
+                            body += "data: "
+                                    "{\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_"
+                                    "tokens\":4,\"total_tokens\":14}}\n\n";
+                        body += "data: [DONE]\n\n";
+                    }
                     socket->write(QByteArray("HTTP/1.1 ") + QByteArray::number(status) +
-                                  " Test\r\nContent-Type: application/json\r\nConnection: "
+                                  " Test\r\nContent-Type: " +
+                                  (sse ? "text/event-stream" : "application/json") +
+                                  "\r\nConnection: "
                                   "close\r\nContent-Length: " +
                                   QByteArray::number(body.size()) + "\r\n\r\n" + body);
                     socket->disconnectFromHost();
@@ -218,6 +252,7 @@ class Server final : public QObject {
     QList<QByteArray> rawRequests;
     std::function<QJsonObject(const QJsonObject&, int)> makeOutput;
     bool respond = true;
+    bool streaming = true;
     bool withUsage = true;
     bool withReasoning = false;
     QByteArray responseOverride;
@@ -258,7 +293,49 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void validatesLegacyAndCorruptPrerequisites();
     void carriesAliasRulesAndPreservesSemanticVerdicts_data();
     void carriesAliasRulesAndPreservesSemanticVerdicts();
+    void monitorShowsOnlyTheCurrentRequest();
+    void acceptsJsonFallbackWithoutPretendingItIsSse();
 };
+
+void ChapterAnalysisPipelineTest::monitorShowsOnlyTheCurrentRequest() {
+    app::StreamMonitorWidget monitor;
+    auto* text = monitor.findChild<QPlainTextEdit*>(QStringLiteral("streamMonitorMessages"));
+    auto* status = monitor.findChild<QLabel*>(QStringLiteral("streamMonitorStatus"));
+    QVERIFY(text->isReadOnly());
+    const auto old = QUuid::createUuid();
+    const auto current = QUuid::createUuid();
+    monitor.beginRequest(old, QStringLiteral("分析员"));
+    monitor.updateRequest(old, QStringLiteral("旧内容"), true);
+    QTRY_COMPARE(text->toPlainText(), QStringLiteral("旧内容"));
+    QVERIFY(status->text().contains(QStringLiteral("分析中")));
+    monitor.beginRequest(current, QStringLiteral("复核员"));
+    QVERIFY(text->toPlainText().isEmpty());
+    monitor.updateRequest(old, QStringLiteral("迟到的旧内容"), true);
+    monitor.finishRequest(old, QStringLiteral("旧请求完成"));
+    QVERIFY(text->toPlainText().isEmpty());
+    monitor.updateRequest(current, QStringLiteral("<b>新内容</b>"), false);
+    monitor.finishRequest(current, QStringLiteral("已取消"));
+    QCOMPARE(text->toPlainText(), QStringLiteral("<b>新内容</b>"));
+    QVERIFY(status->text().contains(QStringLiteral("已取消")));
+    monitor.updateRequest(current, QStringLiteral("取消后的迟到数据"), true);
+    QCOMPARE(text->toPlainText(), QStringLiteral("<b>新内容</b>"));
+}
+
+void ChapterAnalysisPipelineTest::acceptsJsonFallbackWithoutPretendingItIsSse() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.streaming = false;
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    QSignalSpy streams(&controller, &Controller::streamFinished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), 3);
+    QCOMPARE(streams.size(), 3);
+    for (const auto& result : streams)
+        QVERIFY(result[1].toString().contains(QStringLiteral("非 SSE")));
+}
 
 void ChapterAnalysisPipelineTest::carriesAliasRulesAndPreservesSemanticVerdicts_data() {
     QTest::addColumn<QString>("source");
@@ -708,6 +785,8 @@ void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
     Controller controller;
     QSignalSpy finished(&controller, &Controller::finished);
     auto connection = server.connection();
+    QSignalSpy streams(&controller, &Controller::streamStarted);
+    QSignalSpy progress(&controller, &Controller::streamProgress);
     connection.options.enableThinking = false;
     controller.start(fixture.path, fixture.book, 0, fixture.preview, connection);
     connection.options.enableThinking = true;
@@ -716,6 +795,8 @@ void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
     QVERIFY2(finished[0][0].toString().contains(QStringLiteral("通过")),
              qPrintable(finished[0][0].toString()));
     QCOMPARE(server.requests.size(), 3);
+    QCOMPARE(streams.size(), 3);
+    QVERIFY(progress.size() >= 3);
     const auto entries = history(fixture);
     QCOMPARE(entries.size(), 3);
     for (qsizetype index = 0; index < entries.size(); ++index) {
@@ -727,11 +808,16 @@ void ChapterAnalysisPipelineTest::runsThreeRolesAndPersistsHistory() {
         QVERIFY(server.requests[index].value(QStringLiteral("enable_thinking")).isBool());
         QVERIFY(!server.requests[index].value(QStringLiteral("enable_thinking")).toBool());
         QVERIFY(entries[index].outcome.value(QStringLiteral("usage_known")).toBool());
+        QCOMPARE(entries[index].outcome.value(QStringLiteral("response_transport")).toString(),
+                 QStringLiteral("sse"));
+        QCOMPARE(entries[index].outcome.value(QStringLiteral("response_record_format")).toString(),
+                 QStringLiteral("assembled-chat-completion-json"));
         QCOMPARE(entries[index].context.content.value(QStringLiteral("role_index")).toInt(),
                  static_cast<int>(index));
         QCOMPARE(server.requests[index].value(QStringLiteral("model")).toString(),
                  QStringLiteral("fixture-model"));
         QVERIFY(server.requests[index].contains(QStringLiteral("max_tokens")));
+        QVERIFY(server.requests[index].value(QStringLiteral("stream")).toBool());
         QVERIFY(!server.rawRequests[index].contains("Second file."));
         QVERIFY(!server.rawRequests[index].contains(fixture.source.path().toUtf8()));
     }

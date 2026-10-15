@@ -7,6 +7,8 @@ qt_add_library(
     analysis_connection.h
     task_indicator.cpp
     task_indicator.h
+    stream_monitor_widget.cpp
+    stream_monitor_widget.h
     novel_analysis_workbench.cpp
     novel_analysis_workbench.h
     document_metrics.cpp

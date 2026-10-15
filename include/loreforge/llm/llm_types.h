@@ -40,6 +40,7 @@ struct LLMRequest final {
     int maxCompletionTokens = 0;
     int timeoutMs = 30'000;
     RetryPolicy retryPolicy;
+    bool stream = false;
 
     friend bool operator==(const LLMRequest&, const LLMRequest&) = default;
 };
@@ -65,6 +66,7 @@ struct LLMResponse final {
     QByteArray rawResponse;
 
     bool usageReported = false;
+    bool streamed = false;
 
     friend bool operator==(const LLMResponse&, const LLMResponse&) = default;
 };
@@ -90,7 +92,10 @@ enum class ResponseIssue {
     InvalidUsage,
     StructuredJson,
     StructuredType,
-    OutputLimit
+    OutputLimit,
+    StreamProtocol,
+    StreamIncomplete,
+    ResponseLimit
 };
 
 struct ResponseDiagnostics final {

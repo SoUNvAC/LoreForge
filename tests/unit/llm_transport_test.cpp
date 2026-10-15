@@ -24,6 +24,10 @@ struct HttpResponse final {
     QByteArray body;
     bool respond = true;
     QByteArray extraHeaders;
+    QList<QByteArray> chunks;
+    int chunkDelayMs = 10;
+    bool keepOpen = false;
+    QByteArray contentType = "application/json";
 };
 
 class ScriptedHttpServer final : public QObject {
@@ -100,14 +104,39 @@ class ScriptedHttpServer final : public QObject {
         }
         const auto reason = response.status == 200 ? QByteArrayLiteral("OK")
                                                    : QByteArrayLiteral("Service Unavailable");
-        const auto wire = QByteArrayLiteral("HTTP/1.1 ") + QByteArray::number(response.status) +
-                          QByteArrayLiteral(" ") + reason + QByteArrayLiteral("\r\n") +
-                          response.extraHeaders +
-                          QByteArrayLiteral("Content-Type: application/json\r\nContent-Length: ") +
-                          QByteArray::number(response.body.size()) +
-                          QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + response.body;
+        auto body = response.body;
+        if (!response.chunks.isEmpty()) {
+            body.clear();
+            for (const auto& chunk : response.chunks)
+                body += chunk;
+        }
+        const auto wire =
+            QByteArrayLiteral("HTTP/1.1 ") + QByteArray::number(response.status) +
+            QByteArrayLiteral(" ") + reason + QByteArrayLiteral("\r\n") + response.extraHeaders +
+            QByteArrayLiteral("Content-Type: ") + response.contentType +
+            (response.keepOpen
+                 ? QByteArray("\r\nConnection: keep-alive\r\n\r\n")
+                 : QByteArray("\r\nContent-Length: ") + QByteArray::number(body.size()) +
+                       "\r\nConnection: close\r\n\r\n");
         socket->write(wire);
-        socket->disconnectFromHost();
+        if (response.chunks.isEmpty()) {
+            socket->write(body);
+            if (!response.keepOpen)
+                socket->disconnectFromHost();
+        } else {
+            for (int index = 0; index < response.chunks.size(); ++index) {
+                const auto chunk = response.chunks[index];
+                const auto last = index == response.chunks.size() - 1;
+                QTimer::singleShot(index * response.chunkDelayMs, socket,
+                                   [socket, chunk, last, keepOpen = response.keepOpen] {
+                                       if (socket->state() == QAbstractSocket::ConnectedState) {
+                                           socket->write(chunk);
+                                           if (last && !keepOpen)
+                                               socket->disconnectFromHost();
+                                       }
+                                   });
+            }
+        }
     }
 
     QTcpServer server_;
@@ -129,6 +158,23 @@ QByteArray successResponse(QString content, int promptTokens = 4, int completion
                                  {u"total_tokens"_s, promptTokens + completionTokens}}},
     };
     return QJsonDocument(response).toJson(QJsonDocument::Compact);
+}
+
+QByteArray streamEvent(const QJsonObject& delta, const QJsonValue& finish = QJsonValue()) {
+    return "data: " +
+           QJsonDocument(
+               QJsonObject{{u"id"_s, u"stream-fixture"_s},
+                           {u"model"_s, u"fixture-model"_s},
+                           {u"choices"_s, QJsonArray{QJsonObject{{u"index"_s, 0},
+                                                                 {u"delta"_s, delta},
+                                                                 {u"finish_reason"_s, finish}}}}})
+               .toJson(QJsonDocument::Compact) +
+           "\r\n\r\n";
+}
+QByteArray streamUsage() {
+    return "data: "
+           "{\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3,\"total_"
+           "tokens\":7}}\n\n";
 }
 
 loreforge::llm::LLMRequest request(QString content = u"Return JSON."_s) {
@@ -178,7 +224,226 @@ class LLMTransportTest final : public QObject {
     void doesNotFollowRedirects();
     void reportsSafeResponseDiagnostics_data();
     void reportsSafeResponseDiagnostics();
+    void receivesIncrementalSseWithoutWaitingForDisconnect();
+    void rejectsIncompleteAndMalformedStreams_data();
+    void rejectsIncompleteAndMalformedStreams();
+    void cancelsAndTimesOutStreamsWithoutRetry();
+    void redactsCredentialsAcrossStreamDeltas();
+    void acceptsMultilineDataAndCarriageReturns();
+    void retainsReportedUsageWhenStreamingIsCancelled();
 };
+
+void LLMTransportTest::acceptsMultilineDataAndCarriageReturns() {
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.contentType = "text/event-stream";
+    auto first = streamEvent({{u"content"_s, u"{}"_s}});
+    first.replace("data: {", "event: message\nid: ignored\nretry: 1\ndata: {\ndata: ");
+    response.body = first + streamEvent({}, u"stop"_s) + "data: [DONE]\r\r";
+    response.body.replace("\r\n", "\r");
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    input.responseFormat = {{u"type"_s, u"json_object"_s}};
+    std::optional<loreforge::llm::LLMResult> result;
+    static_cast<void>(
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); }));
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMResponse>(*result));
+    const auto output = std::get<loreforge::llm::LLMResponse>(*result);
+    QVERIFY(output.streamed);
+    QVERIFY(!output.usageReported);
+}
+
+void LLMTransportTest::retainsReportedUsageWhenStreamingIsCancelled() {
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.contentType = "text/event-stream";
+    response.body =
+        streamEvent({{u"content"_s, u"{}"_s}}) + streamEvent({}, u"stop"_s) + streamUsage();
+    response.keepOpen = true;
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    input.timeoutMs = 3000;
+    std::optional<loreforge::llm::LLMResult> result;
+    QSignalSpy progress(&client, &loreforge::llm::QwenClient::streamProgress);
+    const auto id =
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); });
+    QTRY_VERIFY(!progress.isEmpty());
+    QVERIFY(client.cancel(id));
+    QVERIFY(result.has_value());
+    const auto error = std::get<loreforge::llm::LLMError>(*result);
+    QCOMPARE(error.code, loreforge::llm::LLMErrorCode::Cancelled);
+    QVERIFY(error.diagnostics.usageReported);
+    QCOMPARE(error.diagnostics.usage.totalTokens, 7);
+}
+
+void LLMTransportTest::receivesIncrementalSseWithoutWaitingForDisconnect() {
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.contentType = "text/event-stream; charset=utf-8";
+    response.keepOpen = true;
+    response.chunkDelayMs = 25;
+    const auto first = streamEvent({{u"content"_s, u"{\"name\":\"中文"_s}});
+    const auto split = first.indexOf(QStringLiteral("中").toUtf8()) + 1;
+    response.chunks = {QByteArray("\xef\xbb\xbf: heartbeat\r\n\r\n"),
+                       streamEvent({{u"role"_s, u"assistant"_s}}),
+                       streamEvent({{u"reasoning_content"_s, u"hidden-thinking"_s}}),
+                       first.first(split),
+                       first.sliced(split),
+                       streamEvent({{u"content"_s, u"\"}"_s}}),
+                       streamEvent({}, u"stop"_s),
+                       streamUsage(),
+                       QByteArray("data: [DONE]\n\n")};
+    server.enqueue(response);
+    auto client = makeClient(server);
+    QSignalSpy started(&client, &loreforge::llm::QwenClient::streamStarted);
+    QSignalSpy progress(&client, &loreforge::llm::QwenClient::streamProgress);
+    QSignalSpy finished(&client, &loreforge::llm::QwenClient::streamFinished);
+    auto input = request();
+    input.stream = true;
+    input.timeoutMs = 2000;
+    input.responseFormat = {{u"type"_s, u"json_object"_s}};
+    std::optional<loreforge::llm::LLMResult> result;
+    const auto id =
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); });
+    QTRY_VERIFY(!progress.isEmpty());
+    QVERIFY(!result.has_value());
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMResponse>(*result));
+    const auto output = std::get<loreforge::llm::LLMResponse>(*result);
+    QCOMPARE(output.structuredContent.toObject().value(u"name"_s).toString(), u"中文"_s);
+    QCOMPARE(output.usage.totalTokens, 7);
+    QVERIFY(output.usageReported);
+    QVERIFY(!output.rawResponse.contains("hidden-thinking"));
+    QCOMPARE(started.size(), 1);
+    QCOMPARE(finished.size(), 1);
+    QCOMPARE(started[0][0].toUuid(), id);
+    bool generating = false;
+    for (const auto& event : progress) {
+        QCOMPARE(event[0].toUuid(), id);
+        QVERIFY(!event[1].toString().contains(u"hidden-thinking"_s));
+        generating |= event[2].toBool();
+    }
+    QVERIFY(generating);
+    QVERIFY(output.rawRequest.contains("\"stream\":true"));
+    QVERIFY(output.rawRequest.contains("\"include_usage\":true"));
+    QVERIFY(server.requestAt(0).toLower().contains("accept: text/event-stream"));
+}
+
+void LLMTransportTest::rejectsIncompleteAndMalformedStreams_data() {
+    using loreforge::llm::ResponseIssue;
+    QTest::addColumn<QByteArray>("body");
+    QTest::addColumn<int>("issue");
+    const auto valid =
+        streamEvent({{u"content"_s, u"{}"_s}}) + streamEvent({}, u"stop"_s) + streamUsage();
+    QTest::newRow("no-done") << valid << int(ResponseIssue::StreamIncomplete);
+    QTest::newRow("no-finish") << streamEvent({{u"content"_s, u"{}"_s}}) + "data: [DONE]\n\n"
+                               << int(ResponseIssue::StreamIncomplete);
+    QTest::newRow("unfinished-event")
+        << valid + "data: [DONE]" << int(ResponseIssue::StreamIncomplete);
+    QTest::newRow("bad-json") << QByteArray("data: nope\n\n") << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("error-event") << QByteArray("data: {\"error\":\"fixture-secret\"}\n\n")
+                                 << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("bad-content") << streamEvent({{u"content"_s, QJsonArray{}}})
+                                 << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("tool-call") << streamEvent({{u"tool_calls"_s, QJsonArray{}}})
+                               << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("event-too-large") << QByteArray("data: ") + QByteArray(1024 * 1024 + 1, 'x')
+                                     << int(ResponseIssue::ResponseLimit);
+    QTest::newRow("after-done") << valid + "data: [DONE]\n\ndata: {}\n\n"
+                                << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("reasoning-only-length")
+        << streamEvent({{u"reasoning_content"_s, u"private-thought"_s}}) +
+               streamEvent({}, u"length"_s) + streamUsage() + "data: [DONE]\n\n"
+        << int(ResponseIssue::EmptyContent);
+    QTest::newRow("length-valid-json")
+        << streamEvent({{u"content"_s, u"{}"_s}}) + streamEvent({}, u"length"_s) + streamUsage() +
+               "data: [DONE]\n\n"
+        << int(ResponseIssue::OutputLimit);
+    QTest::newRow("invalid-usage")
+        << streamEvent({{u"content"_s, u"{}"_s}}) + streamEvent({}, u"stop"_s) +
+               "data: {\"choices\":[],\"usage\":{\"total_tokens\":1.5}}\n\ndata: [DONE]\n\n"
+        << int(ResponseIssue::InvalidUsage);
+}
+
+void LLMTransportTest::rejectsIncompleteAndMalformedStreams() {
+    QFETCH(QByteArray, body);
+    QFETCH(int, issue);
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.body = body;
+    response.contentType = "text/event-stream";
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    input.responseFormat = {{u"type"_s, u"json_object"_s}};
+    std::optional<loreforge::llm::LLMResult> result;
+    static_cast<void>(
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); }));
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMError>(*result));
+    const auto error = std::get<loreforge::llm::LLMError>(*result);
+    QCOMPARE(int(error.diagnostics.issue), issue);
+    QVERIFY(!loreforge::llm::responseDiagnosticSummary(error.diagnostics)
+                 .contains(u"private-thought"_s));
+    QCOMPARE(server.requestCount(), 1);
+}
+
+void LLMTransportTest::cancelsAndTimesOutStreamsWithoutRetry() {
+    for (const bool cancel : {false, true}) {
+        ScriptedHttpServer server;
+        HttpResponse response;
+        response.contentType = "text/event-stream";
+        response.body = streamEvent({{u"content"_s, u"partial"_s}});
+        response.keepOpen = true;
+        server.enqueue(response);
+        auto client = makeClient(server);
+        auto input = request();
+        input.stream = true;
+        input.timeoutMs = cancel ? 3000 : 500;
+        std::optional<loreforge::llm::LLMResult> result;
+        QSignalSpy progress(&client, &loreforge::llm::QwenClient::streamProgress);
+        const auto id =
+            client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); });
+        if (cancel) {
+            QTRY_VERIFY(!progress.isEmpty());
+            QVERIFY(client.cancel(id));
+        }
+        QTRY_VERIFY(result.has_value());
+        const auto error = std::get<loreforge::llm::LLMError>(*result);
+        QCOMPARE(error.code, cancel ? loreforge::llm::LLMErrorCode::Cancelled
+                                    : loreforge::llm::LLMErrorCode::Timeout);
+        QCOMPARE(server.requestCount(), 1);
+    }
+}
+
+void LLMTransportTest::redactsCredentialsAcrossStreamDeltas() {
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.contentType = "text/event-stream";
+    response.chunkDelayMs = 40;
+    response.chunks = {streamEvent({{u"content"_s, u"prefix fixture-"_s}}),
+                       streamEvent({{u"content"_s, u"secret suffix"_s}}),
+                       streamEvent({}, u"stop"_s), QByteArray("data: [DONE]\n\n")};
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    QSignalSpy progress(&client, &loreforge::llm::QwenClient::streamProgress);
+    std::optional<loreforge::llm::LLMResult> result;
+    static_cast<void>(
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); }));
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(!progress.isEmpty());
+    for (const auto& event : progress)
+        QVERIFY(!event[1].toString().contains(u"fixture-secret"_s));
+    QVERIFY(progress.last()[1].toString().contains(QStringLiteral("[凭据已隐藏]")));
+}
 
 void LLMTransportTest::reportsSafeResponseDiagnostics_data() {
     using loreforge::llm::ResponseIssue;

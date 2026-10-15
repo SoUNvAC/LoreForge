@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "stream_monitor_widget.h"
 
 #include "context_inspector.h"
 #include "document_metrics.h"
@@ -287,7 +288,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this](int role, const QString& status, const QString& usage, qint64 latency) {
                 llmWorkbench_->showAnalysisMetrics(
                     tr("当前小说任务：角色 %1 · %2\n%3 · 响应耗时 %4 ms\n"
-                       "生成速度未提供（非流式）；任务结束后刷新项目/本章累计。")
+                       "SSE 接收状态见底部；精确生成速度未提供，任务结束后刷新项目/本章累计。")
                         .arg(role + 1)
                         .arg(status, usage)
                         .arg(latency));
@@ -298,6 +299,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 analysisWorkbench_->showError(std::move(status));
             });
     centralLayout->addWidget(pages, 1);
+    auto* streamMonitor = new StreamMonitorWidget(central);
+    centralLayout->addWidget(streamMonitor);
+    connect(analysisController_, &ChapterAnalysisController::streamStarted, streamMonitor,
+            &StreamMonitorWidget::beginRequest);
+    connect(analysisController_, &ChapterAnalysisController::streamProgress, streamMonitor,
+            &StreamMonitorWidget::updateRequest);
+    connect(analysisController_, &ChapterAnalysisController::streamFinished, streamMonitor,
+            &StreamMonitorWidget::finishRequest);
+    connect(llmWorkbench_, &LlmWorkbench::streamStarted, streamMonitor,
+            &StreamMonitorWidget::beginRequest);
+    connect(llmWorkbench_, &LlmWorkbench::streamProgress, streamMonitor,
+            &StreamMonitorWidget::updateRequest);
+    connect(llmWorkbench_, &LlmWorkbench::streamFinished, streamMonitor,
+            &StreamMonitorWidget::finishRequest);
     setCentralWidget(central);
 
     contextInspector_ = new ContextInspectorWidget(this);

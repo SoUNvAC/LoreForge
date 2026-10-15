@@ -413,7 +413,7 @@ void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QS
     const auto summary =
         tr("小说任务（持久化，含失败/重复运行，不含连接测试）：\n"
            "项目已知 %1 token · %2 次用量未知；本章已知 %3 token · %4 次用量未知。\n"
-           "生成速度：未提供（非流式）；各角色显示真实响应耗时。")
+           "精确生成速度：未提供；SSE 接收状态见底部，各角色显示真实响应耗时。")
             .arg(projectTokens)
             .arg(projectUnknown)
             .arg(chapterTokens)

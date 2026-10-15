@@ -5,6 +5,7 @@
 #include "loreforge/llm/qwen_client.h"
 #include "task_indicator.h"
 
+#include <QTimer>
 #include <QWidget>
 
 #include <memory>
@@ -36,6 +37,9 @@ class LlmWorkbench final : public QWidget {
     void configurationChanged();
     void taskStatus(QUuid id, TaskState state, QString text);
     void analysisBudgetsLoaded(int maximumTokens, int reservedTokens);
+    void streamStarted(QUuid requestId, QString label);
+    void streamProgress(QUuid requestId, QString text, bool generating);
+    void streamFinished(QUuid requestId, QString status);
 
   private:
     void saveConfiguration();
@@ -81,6 +85,7 @@ class LlmWorkbench final : public QWidget {
     qint64 outputTokens_ = 0;
     qint64 missingUsage_ = 0;
     bool closing_ = false;
+    QTimer streamSilence_;
 };
 
 } // namespace loreforge::app

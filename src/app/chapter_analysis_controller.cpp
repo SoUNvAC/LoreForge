@@ -226,6 +226,42 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
         }
     }
     client_ = std::make_unique<llm::QwenClient>(connection_.options);
+    streamSilence_.setSingleShot(true);
+    streamSilence_.setInterval(5000);
+    disconnect(&streamSilence_, nullptr, this, nullptr);
+    connect(&streamSilence_, &QTimer::timeout, this, [this] {
+        if (busy_ && !requestId_.isNull())
+            emit taskStatus(TaskState::Waiting,
+                            QStringLiteral("等待后续 SSE 数据（已静默 5 秒，不代表失败）"));
+    });
+    connect(client_.get(), &llm::QwenClient::streamStarted, this, [this](QUuid id) {
+        if (id != requestId_ || !busy_ || !persisted_)
+            return;
+        const QStringList names{QStringLiteral("分析员"), QStringLiteral("复核员"),
+                                QStringLiteral("审查员")};
+        emit streamStarted(
+            id, QStringLiteral("第 %1 章 · %2").arg(chapterIndex_ + 1).arg(names[role_]));
+    });
+    connect(client_.get(), &llm::QwenClient::streamProgress, this,
+            [this](QUuid id, QString text, bool generating) {
+                if (id != requestId_ || !busy_ || !persisted_)
+                    return;
+                streamSilence_.start();
+                emit streamProgress(id, std::move(text), generating);
+                const QStringList names{QStringLiteral("分析员"), QStringLiteral("复核员"),
+                                        QStringLiteral("审查员")};
+                emit taskStatus(
+                    TaskState::Waiting,
+                    generating ? QStringLiteral("[分析中] %1 · SSE 持续接收").arg(names[role_])
+                               : QStringLiteral("%1 · SSE 连接活跃 / 接收事件").arg(names[role_]));
+            });
+    connect(client_.get(), &llm::QwenClient::streamFinished, this,
+            [this](QUuid id, QString status) {
+                if (id == requestId_ && busy_) {
+                    streamSilence_.stop();
+                    emit streamFinished(id, std::move(status));
+                }
+            });
     busy_ = true;
     emit busyChanged(true);
     for (int pending = role_; pending < 3; ++pending)
@@ -452,6 +488,7 @@ void ChapterAnalysisController::nextRole() {
                                     QString::fromUtf8(inference::canonicalJson(user))}}});
     }
     content.insert(QStringLiteral("format"), QStringLiteral("loreforge-analysis-role-v1"));
+    content.insert(QStringLiteral("requested_transport"), QStringLiteral("sse"));
     // This immutable record is prepared before sending; lifecycle lives in llm_runs.
     content.remove(QStringLiteral("sent"));
     content.insert(QStringLiteral("source_snapshot_id"), source_.snapshot.id.toString());
@@ -479,6 +516,7 @@ void ChapterAnalysisController::nextRole() {
     request.timeoutMs = connection_.timeoutMs;
     request.maxCompletionTokens = content.value(QStringLiteral("reserved_output_tokens")).toInt();
     request.retryPolicy.maxRetries = 0;
+    request.stream = true;
     const auto messages = content.value(QStringLiteral("messages")).toArray();
     request.messages = {
         {llm::LLMRole::System, messages[0].toObject().value(QStringLiteral("content")).toString()},
@@ -566,6 +604,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     std::optional<QJsonDocument> parsedDocument;
     std::optional<QByteArray> raw;
     bool usageKnown = false;
+    QString responseTransport = QStringLiteral("unknown");
     QJsonObject responseDiagnostics;
     auto schemaReport = inference::ValidationReport{inference::ValidationStatus::Unavailable, {}};
     if (const auto* error = std::get_if<llm::LLMError>(&result)) {
@@ -588,6 +627,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         // Provider error bodies may reflect credentials: never store them.
     } else {
         const auto& response = std::get<llm::LLMResponse>(result);
+        responseTransport = response.streamed ? QStringLiteral("sse") : QStringLiteral("json");
         run_.attemptCount = response.attemptCount;
         run_.latencyMs = response.latencyMs;
         usageKnown = response.usageReported;
@@ -663,6 +703,11 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
          source_.snapshot.content.value(QStringLiteral("chapter_id"))},
         {QStringLiteral("role_index"), role_},
         {QStringLiteral("usage_known"), usageKnown},
+        {QStringLiteral("response_transport"), responseTransport},
+        {QStringLiteral("response_record_format"),
+         responseTransport == QStringLiteral("sse")
+             ? QStringLiteral("assembled-chat-completion-json")
+             : QStringLiteral("provider-json-or-none")},
         {QStringLiteral("response_diagnostics"), responseDiagnostics},
         {QStringLiteral("domain_errors"), domainErrors},
         {QStringLiteral("verdict"), parsed.value(QStringLiteral("verdict"))}};

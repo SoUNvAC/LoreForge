@@ -4,6 +4,7 @@ qt_add_library(
     ${PROJECT_SOURCE_DIR}/include/loreforge/llm/llm_types.h
     ${PROJECT_SOURCE_DIR}/include/loreforge/llm/qwen_client.h
     qwen_client.cpp
+    chat_completion_stream.h
 )
 
 add_library(LoreForge::Llm ALIAS LoreForgeLlm)

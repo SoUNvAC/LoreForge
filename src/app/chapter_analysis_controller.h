@@ -7,6 +7,7 @@
 #include "task_indicator.h"
 
 #include <QObject>
+#include <QTimer>
 #include <array>
 
 namespace loreforge::app {
@@ -41,6 +42,9 @@ class ChapterAnalysisController final : public QObject {
     void roleChanged(int role, QString status, QString usage, qint64 latencyMs);
     void finished(QString status);
     void taskStatus(TaskState state, QString text);
+    void streamStarted(QUuid requestId, QString label);
+    void streamProgress(QUuid requestId, QString text, bool generating);
+    void streamFinished(QUuid requestId, QString status);
 
   private:
     void nextRole();
@@ -67,6 +71,7 @@ class ChapterAnalysisController final : public QObject {
     bool cancelled_ = false;
     bool persisted_ = false;
     bool closing_ = false;
+    QTimer streamSilence_;
 };
 
 } // namespace loreforge::app

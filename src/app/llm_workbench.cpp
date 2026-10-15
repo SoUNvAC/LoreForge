@@ -137,8 +137,8 @@ LlmWorkbench::LlmWorkbench(QWidget* parent, QString settingsFile) : QWidget(pare
     connection_->setWordWrap(true);
     connection_->setTextFormat(Qt::PlainText);
     layout->addWidget(connection_);
-    metrics_ =
-        new QLabel(tr("生成速度：未提供（非流式测试）；耗时与 token 用量将在响应后显示"), this);
+    metrics_ = new QLabel(
+        tr("精确生成速度：未提供；SSE 接收状态见底部，耗时与 token 用量在响应后显示"), this);
     metrics_->setObjectName(QStringLiteral("llmTestMetrics"));
     metrics_->setWordWrap(true);
     layout->addWidget(metrics_);
@@ -404,6 +404,15 @@ void LlmWorkbench::testConnection() {
         return;
     }
     const QUrl endpoint(endpoint_->text().trimmed(), QUrl::StrictMode);
+    streamSilence_.stop();
+    streamSilence_.setSingleShot(true);
+    streamSilence_.setInterval(5000);
+    disconnect(&streamSilence_, nullptr, this, nullptr);
+    connect(&streamSilence_, &QTimer::timeout, this, [this] {
+        if (!requestId_.isNull())
+            emit taskStatus(requestId_, TaskState::Waiting,
+                            tr("连接测试 · 等待后续 SSE 数据（静默 5 秒）"));
+    });
     client_ = std::make_unique<llm::QwenClient>(
         llm::QwenClientOptions{endpoint, apiKey_->text().trimmed().toUtf8(),
                                modelId_->text().trimmed(), privateHost(endpoint),
@@ -411,6 +420,21 @@ void LlmWorkbench::testConnection() {
                                    ? llm::CompletionTokenParameter::MaxTokens
                                    : llm::CompletionTokenParameter::MaxCompletionTokens,
                                enableThinking()});
+    connect(client_.get(), &llm::QwenClient::streamStarted, this, [this](QUuid id) {
+        if (id == requestId_)
+            emit streamStarted(id, tr("连接测试（内置样本）"));
+    });
+    connect(client_.get(), &llm::QwenClient::streamProgress, this,
+            [this](QUuid id, QString text, bool generating) {
+                if (id != requestId_)
+                    return;
+                streamSilence_.start();
+                emit streamProgress(id, std::move(text), generating);
+                emit taskStatus(id, TaskState::Waiting,
+                                generating ? tr("[分析中] 连接测试 · SSE 接收中")
+                                           : tr("连接测试 · SSE 连接活跃"));
+            });
+    connect(client_.get(), &llm::QwenClient::streamFinished, this, &LlmWorkbench::streamFinished);
     llm::LLMRequest request;
     request.messages = {
         {llm::LLMRole::System, QStringLiteral("This is a synthetic connection test. Return only "
@@ -419,6 +443,7 @@ void LlmWorkbench::testConnection() {
     request.timeoutMs = timeout_->value() * 1000;
     request.maxCompletionTokens = outputBudget_->value();
     request.retryPolicy.maxRetries = 0;
+    request.stream = true;
     const auto format = format_->currentText();
     if (format != QStringLiteral("text")) {
         request.responseFormat = {{QStringLiteral("type"), format}};
@@ -482,6 +507,7 @@ void LlmWorkbench::resetTokenCounts() {
 }
 
 void LlmWorkbench::finishTest(llm::LLMResult result) {
+    streamSilence_.stop();
     const auto completedId = requestId_;
     requestId_ = {};
     setBusy(false);
@@ -535,7 +561,7 @@ void LlmWorkbench::finishTest(llm::LLMResult result) {
             inputTokens_ += response.usage.promptTokens;
             outputTokens_ += response.usage.completionTokens;
             metrics_->setText(tr("耗时 %1 ms · 输入 %2 · 输出 %3 · 总计 %4 token\n"
-                                 "生成速度：未提供（非流式）。端到端输出吞吐 %5 "
+                                 "精确生成速度：未提供。端到端输出吞吐 %5 "
                                  "token/s（含排队与等待，非解码速度）。")
                                   .arg(response.latencyMs)
                                   .arg(response.usage.promptTokens)

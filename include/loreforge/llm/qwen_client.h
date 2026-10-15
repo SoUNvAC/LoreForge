@@ -9,11 +9,13 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <memory>
 #include <optional>
 
 class QNetworkReply;
 
 namespace loreforge::llm {
+class ChatCompletionStream;
 
 enum class CompletionTokenParameter { MaxCompletionTokens, MaxTokens };
 
@@ -43,6 +45,12 @@ class QwenClient final : public QObject, public ILLMClient {
     // Exact JSON body, without authentication headers; shared by transport and audit storage.
     [[nodiscard]] QByteArray requestBody(const LLMRequest& request) const;
 
+  signals:
+    void streamStarted(QUuid requestId);
+    // Sanitized current-request tail, not raw wire data or reasoning text.
+    void streamProgress(QUuid requestId, QString text, bool generating);
+    void streamFinished(QUuid requestId, QString status);
+
   private:
     struct PendingRequest final {
         QUuid id;
@@ -54,6 +62,9 @@ class QwenClient final : public QObject, public ILLMClient {
     void processNext();
     void sendAttempt();
     void handleReplyFinished();
+    void readAvailable();
+    void reportStreamProgress(bool generating);
+    [[nodiscard]] ResponseDiagnostics streamDiagnostics(ResponseIssue issue) const;
     void handleTimeout();
     void retryOrFinish(LLMError error);
     void finishActive(LLMResult result);
@@ -69,6 +80,10 @@ class QwenClient final : public QObject, public ILLMClient {
     QTimer retryTimer_;
     QElapsedTimer requestTimer_;
     bool attemptTimedOut_ = false;
+    std::unique_ptr<ChatCompletionStream> stream_;
+    QByteArray responseBuffer_;
+    bool receivedSse_ = false;
+    bool responseTooLarge_ = false;
 };
 
 } // namespace loreforge::llm

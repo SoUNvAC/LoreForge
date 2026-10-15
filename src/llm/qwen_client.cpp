@@ -1,4 +1,5 @@
 #include "loreforge/llm/qwen_client.h"
+#include "chat_completion_stream.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -37,7 +38,10 @@ QByteArray requestPayload(const LLMRequest& request, QStringView model, const QS
 
     QJsonObject payload{{QStringLiteral("model"), model.toString()},
                         {QStringLiteral("messages"), messages},
-                        {QStringLiteral("stream"), false}};
+                        {QStringLiteral("stream"), request.stream}};
+    if (request.stream)
+        payload.insert(QStringLiteral("stream_options"),
+                       QJsonObject{{QStringLiteral("include_usage"), true}});
     if (!request.responseFormat.isEmpty()) {
         payload.insert(QStringLiteral("response_format"), request.responseFormat);
     }
@@ -104,7 +108,10 @@ QJsonObject responseDiagnosticsJson(const ResponseDiagnostics& value) {
                              QStringLiteral("invalid_usage"),
                              QStringLiteral("structured_json"),
                              QStringLiteral("structured_type"),
-                             QStringLiteral("output_limit")};
+                             QStringLiteral("output_limit"),
+                             QStringLiteral("stream_protocol"),
+                             QStringLiteral("stream_incomplete"),
+                             QStringLiteral("response_limit")};
     QJsonObject result{{QStringLiteral("issue"), issues.at(static_cast<int>(value.issue))},
                        {QStringLiteral("finish_reason"), value.finishReason},
                        {QStringLiteral("response_bytes"), value.responseBytes},
@@ -156,6 +163,15 @@ QString responseDiagnosticSummary(const ResponseDiagnostics& value) {
         break;
     case ResponseIssue::OutputLimit:
         reason = QStringLiteral("输出未完成，服务报告长度限制");
+        break;
+    case ResponseIssue::StreamProtocol:
+        reason = QStringLiteral("SSE 事件格式异常或不支持的输出类型");
+        break;
+    case ResponseIssue::StreamIncomplete:
+        reason = QStringLiteral("SSE 未完整结束（缺少结束事件或连接中断）");
+        break;
+    case ResponseIssue::ResponseLimit:
+        reason = QStringLiteral("响应超过本地安全大小限制");
         break;
     case ResponseIssue::None:
         break;
@@ -268,7 +284,10 @@ bool QwenClient::cancel(const QUuid& requestId) {
                           active_->attemptCount,
                           requestTimer_.isValid() ? requestTimer_.elapsed() : 0,
                           activePayload_,
-                          {}});
+                          {},
+                          receivedSse_ && stream_
+                              ? streamDiagnostics(ResponseIssue::StreamIncomplete)
+                              : ResponseDiagnostics{}});
     return true;
 }
 
@@ -295,6 +314,10 @@ void QwenClient::sendAttempt() {
     }
     ++active_->attemptCount;
     attemptTimedOut_ = false;
+    stream_ = std::make_unique<ChatCompletionStream>();
+    responseBuffer_.clear();
+    receivedSse_ = false;
+    responseTooLarge_ = false;
     QNetworkRequest networkRequest(options_.endpoint);
     networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                                 QNetworkRequest::ManualRedirectPolicy);
@@ -304,19 +327,117 @@ void QwenClient::sendAttempt() {
         networkRequest.setRawHeader(QByteArrayLiteral("Authorization"),
                                     QByteArrayLiteral("Bearer ") + options_.apiKey);
     }
-    networkRequest.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
+    networkRequest.setRawHeader(QByteArrayLiteral("Accept"),
+                                active_->request.stream ? QByteArrayLiteral("text/event-stream")
+                                                        : QByteArrayLiteral("application/json"));
     networkRequest.setRawHeader(QByteArrayLiteral("User-Agent"),
                                 QByteArrayLiteral("LoreForge/0.1"));
     activePayload_ = requestBody(active_->request);
     reply_ = network_.post(networkRequest, activePayload_);
     connect(reply_, &QNetworkReply::finished, this, &QwenClient::handleReplyFinished);
+    connect(reply_, &QNetworkReply::readyRead, this, &QwenClient::readAvailable);
     timeoutTimer_.start(active_->request.timeoutMs);
+    if (active_->request.stream)
+        emit streamStarted(active_->id);
+}
+
+void QwenClient::readAvailable() {
+    if (!reply_ || !active_)
+        return;
+    receivedSse_ = active_->request.stream &&
+                   reply_->header(QNetworkRequest::ContentTypeHeader)
+                           .toString()
+                           .section(QLatin1Char(';'), 0, 0)
+                           .trimmed()
+                           .compare(QStringLiteral("text/event-stream"), Qt::CaseInsensitive) == 0;
+    const auto activity = stream_->activity;
+    const auto generation = stream_->generation;
+    while (reply_->bytesAvailable() > 0) {
+        const auto bytes = reply_->read(64 * 1024);
+        if (receivedSse_)
+            stream_->append(bytes);
+        else if (responseBuffer_.size() + bytes.size() <= ChatCompletionStream::maximumWireBytes)
+            responseBuffer_ += bytes;
+        else
+            responseTooLarge_ = true;
+        if (responseTooLarge_ || stream_->issue != ResponseIssue::None) {
+            const QPointer<QNetworkReply> expected(reply_);
+            QTimer::singleShot(0, this, [this, expected] {
+                if (expected && reply_ == expected)
+                    handleReplyFinished();
+            });
+            return;
+        }
+    }
+    if (receivedSse_ && stream_->activity != activity)
+        reportStreamProgress(stream_->generation != generation);
+    if (receivedSse_ && stream_->done) {
+        timeoutTimer_.stop();
+        const QPointer<QNetworkReply> expected(reply_);
+        QTimer::singleShot(0, this, [this, expected] {
+            if (expected && reply_ == expected)
+                handleReplyFinished();
+        });
+    }
+}
+
+void QwenClient::reportStreamProgress(bool generating) {
+    if (!active_ || !stream_)
+        return;
+    auto text = stream_->content;
+    // Hold back a key-length suffix while streaming: reflected credentials may span deltas.
+    // Replacement happens before tail clipping, including at the final flush.
+    const auto key = QString::fromUtf8(options_.apiKey);
+    if (!key.isEmpty()) {
+        text.replace(key, QStringLiteral("[凭据已隐藏]"));
+        if (!stream_->done)
+            text.truncate(qMax<qsizetype>(0, text.size() - key.size() + 1));
+    }
+    constexpr qsizetype displayCharacters = 32768;
+    const auto clipped = text.size() > displayCharacters;
+    text = text.right(displayCharacters);
+    emit streamProgress(
+        active_->id,
+        QStringLiteral("SSE 已接收 %1 字节 · 正文 %2 字节 · 思考 %3 字节（不展示思考内容）%4\n%5")
+            .arg(stream_->wireBytes)
+            .arg(stream_->contentBytes)
+            .arg(stream_->reasoningBytes)
+            .arg(clipped ? QStringLiteral(" · 仅显示正文末尾") : QString{})
+            .arg(text),
+        generating && !stream_->done);
+}
+
+ResponseDiagnostics QwenClient::streamDiagnostics(ResponseIssue issue) const {
+    ResponseDiagnostics diagnostics;
+    diagnostics.issue = issue;
+    diagnostics.responseBytes = stream_->wireBytes;
+    diagnostics.contentBytes = stream_->contentBytes;
+    diagnostics.reasoningBytes = stream_->reasoningBytes;
+    const QStringList allowed{QStringLiteral("stop"),
+                              QStringLiteral("length"),
+                              QStringLiteral("content_filter"),
+                              QStringLiteral("tool_calls"),
+                              QStringLiteral("function_call"),
+                              QStringLiteral("aborted"),
+                              QStringLiteral("insufficient_system_resource")};
+    diagnostics.finishReason = allowed.contains(stream_->finishReason) ? stream_->finishReason
+                               : stream_->finishReason.isEmpty()       ? QStringLiteral("missing")
+                                                                       : QStringLiteral("other");
+    const auto usage = tokenUsage(stream_->usage);
+    diagnostics.usageReported = stream_->usage.isObject() && usage.has_value();
+    diagnostics.usageInvalid = !usage.has_value();
+    if (usage)
+        diagnostics.usage = *usage;
+    return diagnostics;
 }
 
 void QwenClient::handleReplyFinished() {
     if (!active_.has_value() || reply_ == nullptr) {
         return;
     }
+    readAvailable();
+    if (!reply_ || !active_)
+        return;
     timeoutTimer_.stop();
     auto* completedReply = reply_;
     reply_ = nullptr;
@@ -324,8 +445,45 @@ void QwenClient::handleReplyFinished() {
     const auto networkErrorText = completedReply->errorString();
     const auto httpStatus =
         completedReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    const auto payload = attemptTimedOut_ ? QByteArray{} : completedReply->readAll();
+    const auto completedId = active_->id;
+    disconnect(completedReply, nullptr, this, nullptr);
+    if (!completedReply->isFinished())
+        completedReply->abort();
     completedReply->deleteLater();
+    if (receivedSse_) {
+        stream_->finish();
+        if (stream_->done && stream_->issue == ResponseIssue::None)
+            reportStreamProgress(false);
+    }
+    if (!active_ || active_->id != completedId)
+        return;
+    auto payload = receivedSse_ ? QJsonDocument(stream_->envelope()).toJson(QJsonDocument::Compact)
+                                : responseBuffer_;
+
+    const auto streamError = [&](LLMErrorCode code, ResponseIssue issue) {
+        const auto diagnostics = streamDiagnostics(issue);
+        finishActive(LLMError{code,
+                              QStringLiteral("The streaming response did not complete."),
+                              {},
+                              false,
+                              httpStatus,
+                              active_->attemptCount,
+                              requestTimer_.elapsed(),
+                              activePayload_,
+                              {},
+                              diagnostics});
+    };
+    if (responseTooLarge_) {
+        streamError(LLMErrorCode::InvalidResponse, ResponseIssue::ResponseLimit);
+        return;
+    }
+    if (receivedSse_ && httpStatus >= 200 && httpStatus < 300 &&
+        (attemptTimedOut_ || stream_->issue != ResponseIssue::None)) {
+        streamError(attemptTimedOut_ ? LLMErrorCode::Timeout : LLMErrorCode::InvalidResponse,
+                    stream_->issue == ResponseIssue::None ? ResponseIssue::StreamIncomplete
+                                                          : stream_->issue);
+        return;
+    }
 
     if (attemptTimedOut_) {
         retryOrFinish(LLMError{LLMErrorCode::Timeout,
@@ -369,7 +527,7 @@ void QwenClient::handleReplyFinished() {
     const auto object = document.object();
     const auto choices = object.value(QStringLiteral("choices")).toArray();
     ResponseDiagnostics diagnostics;
-    diagnostics.responseBytes = payload.size();
+    diagnostics.responseBytes = receivedSse_ ? stream_->wireBytes : payload.size();
     diagnostics.finishReason = QStringLiteral("missing");
     const auto usage = tokenUsage(object.value(QStringLiteral("usage")));
     diagnostics.usageInvalid = !usage.has_value();
@@ -414,6 +572,8 @@ void QwenClient::handleReplyFinished() {
         return;
     }
     const auto message = choice.value(QStringLiteral("message")).toObject();
+    if (receivedSse_)
+        diagnostics.reasoningBytes = stream_->reasoningBytes;
     const auto contentValue = message.value(QStringLiteral("content"));
     if (message.value(QStringLiteral("reasoning_content")).isString()) {
         diagnostics.reasoningBytes =
@@ -432,6 +592,14 @@ void QwenClient::handleReplyFinished() {
     }
     if (!usage.has_value()) {
         invalid(ResponseIssue::InvalidUsage);
+        return;
+    }
+    if (receivedSse_ && finish != QStringLiteral("stop") && finish != QStringLiteral("length")) {
+        invalid(ResponseIssue::StreamIncomplete);
+        return;
+    }
+    if (receivedSse_ && finish == QStringLiteral("length")) {
+        invalid(ResponseIssue::OutputLimit);
         return;
     }
 
@@ -470,7 +638,7 @@ void QwenClient::handleReplyFinished() {
                     object.value(QStringLiteral("model")).toString(), contentValue.toString(),
                     choice.value(QStringLiteral("finish_reason")).toString(), parsedContent, *usage,
                     active_->attemptCount, requestTimer_.elapsed(), activePayload_, payload,
-                    object.value(QStringLiteral("usage")).isObject()});
+                    object.value(QStringLiteral("usage")).isObject(), receivedSse_});
 }
 
 void QwenClient::handleTimeout() {
@@ -504,6 +672,14 @@ void QwenClient::finishActive(LLMResult result) {
     auto completed = std::move(*active_);
     active_.reset();
     activePayload_.clear();
+    if (completed.request.stream) {
+        const auto succeeded = std::holds_alternative<LLMResponse>(result);
+        emit streamFinished(
+            completed.id,
+            succeeded ? (receivedSse_ ? QStringLiteral("SSE 接收结束；任务结论以完整校验结果为准")
+                                      : QStringLiteral("服务返回普通 JSON（非 SSE）；任务继续校验"))
+                      : QStringLiteral("请求失败或取消；流内容不是已确认的分析结果"));
+    }
     QTimer::singleShot(0, this, &QwenClient::processNext);
     if (completed.completion) {
         completed.completion(completed.id, std::move(result));
