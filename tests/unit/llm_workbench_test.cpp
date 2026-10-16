@@ -135,6 +135,8 @@ class LlmWorkbenchTest final : public QObject {
         QVERIFY(highlightSettings_.isValid());
         qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
                 highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+        qputenv("LOREFORGE_NAVIGATION_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("navigation.ini")).toUtf8());
     }
     void addsSecondPageWithoutDiscardingReadingState();
     void savesProjectApiAndTemporaryKey();

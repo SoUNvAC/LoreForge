@@ -13,6 +13,7 @@
 #include "repair_queue_widget.h"
 
 #include <QAction>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDockWidget>
 #include <QFile>
@@ -24,8 +25,10 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -45,6 +48,30 @@ namespace {
 constexpr int kProjectIndexRole = Qt::UserRole;
 constexpr int kBookIndexRole = Qt::UserRole + 1;
 constexpr int kChapterIndexRole = Qt::UserRole + 2;
+
+QString navigationSettingsPath() {
+    const auto overridePath = qEnvironmentVariable("LOREFORGE_NAVIGATION_SETTINGS");
+    return overridePath.isEmpty()
+               ? QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+                     QStringLiteral("/workspace-navigation.ini")
+               : overridePath;
+}
+QString navigationHash(const QString& value) {
+    return QString::fromLatin1(
+        QCryptographicHash::hash(value.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+QString navigationGroup(const QString& filePath) {
+    auto path = QFileInfo(filePath).canonicalFilePath();
+    if (path.isEmpty())
+        path = QFileInfo(filePath).absoluteFilePath();
+#ifdef Q_OS_WIN
+    path = path.toCaseFolded();
+#endif
+    return QStringLiteral("workspaces/") + navigationHash(path);
+}
+QString navigationChapterKey(const QString& projectId, const QString& bookId) {
+    return QStringLiteral("chapters/") + navigationHash(projectId + QLatin1Char('/') + bookId);
+}
 
 QGroupBox* panel(QString title, QWidget* content, QWidget* parent) {
     auto* group = new QGroupBox(std::move(title), parent);
@@ -661,6 +688,10 @@ void MainWindow::chooseProjectFile() {
 }
 
 void MainWindow::setWorkspace(StoredWorkspace workspace) {
+    QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
+    navigation.beginGroup(navigationGroup(workspace.databasePath));
+    const auto lastProject = navigation.value(QStringLiteral("last_project")).toString();
+    const auto lastBook = navigation.value(QStringLiteral("last_book")).toString();
     analysisController_->cancel();
     llmWorkbench_->setProject({});
     workspace_ = std::move(workspace);
@@ -670,6 +701,7 @@ void MainWindow::setWorkspace(StoredWorkspace workspace) {
     clearBookView();
 
     qsizetype bookCount = 0;
+    QTreeWidgetItem* rememberedBook = nullptr;
     for (qsizetype projectIndex = 0; projectIndex < workspace_->projects.size(); ++projectIndex) {
         const auto& project = workspace_->projects.at(projectIndex);
         auto* projectItem =
@@ -687,6 +719,8 @@ void MainWindow::setWorkspace(StoredWorkspace workspace) {
             bookItem->setData(0, kProjectIndexRole, projectIndex);
             bookItem->setData(0, kBookIndexRole, bookIndex);
             bookItem->setToolTip(0, tr("Book ID: %1").arg(book.id.toString()));
+            if (project.metadata.id.toString() == lastProject && book.id.toString() == lastBook)
+                rememberedBook = bookItem;
             ++bookCount;
         }
         projectItem->setExpanded(true);
@@ -704,8 +738,9 @@ void MainWindow::setWorkspace(StoredWorkspace workspace) {
     workspaceStatus_->setStyleSheet(QStringLiteral("font-weight:600;color:#167345;"));
     workspaceStatus_->setToolTip(workspace_->databasePath);
     auto* firstProject = projectExplorer_->topLevelItem(0);
-    projectExplorer_->setCurrentItem(firstProject->childCount() > 0 ? firstProject->child(0)
-                                                                    : firstProject);
+    projectExplorer_->setCurrentItem(rememberedBook                   ? rememberedBook
+                                     : firstProject->childCount() > 0 ? firstProject->child(0)
+                                                                      : firstProject);
 }
 
 void MainWindow::selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
@@ -748,6 +783,13 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
     selectedProjectIndex_ = projectIndex;
     selectedBookIndex_ = bookIndex;
     const auto& book = workspace_->projects.at(projectIndex).books.at(bookIndex);
+    QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
+    navigation.beginGroup(navigationGroup(workspace_->databasePath));
+    const auto rememberedChapter =
+        navigation
+            .value(navigationChapterKey(workspace_->projects[projectIndex].metadata.id.toString(),
+                                        book.id.toString()))
+            .toString();
     chapterTree_->clear();
     for (const auto& chapter : book.chapters) {
         const auto metrics = DocumentMetrics::forChapter(chapter);
@@ -772,7 +814,14 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
                              .arg(book.metadata.sourceFormat.toUpper(), book.metadata.sourceLocator,
                                   book.metadata.sourceHash.toHex()));
     if (!book.chapters.isEmpty()) {
-        chapterTree_->setCurrentItem(chapterTree_->topLevelItem(0));
+        qsizetype rememberedIndex = 0;
+        for (qsizetype index = 0; index < book.chapters.size(); ++index) {
+            if (book.chapters[index].id.toString() == rememberedChapter) {
+                rememberedIndex = index;
+                break;
+            }
+        }
+        chapterTree_->setCurrentItem(chapterTree_->topLevelItem(rememberedIndex));
     } else {
         chapterMetadata_->clear();
         chapterStatus_->setText(tr("○ Stored book contains no chapters"));
@@ -800,6 +849,18 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
         return;
     }
     const auto& chapter = book->chapters.at(chapterIndex);
+    bool navigationSaved = true;
+    if (workspace_ && !workspace_->databasePath.isEmpty()) {
+        QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
+        navigation.beginGroup(navigationGroup(workspace_->databasePath));
+        const auto projectId = workspace_->projects[selectedProjectIndex_].metadata.id.toString();
+        navigation.setValue(QStringLiteral("last_project"), projectId);
+        navigation.setValue(QStringLiteral("last_book"), book->id.toString());
+        navigation.setValue(navigationChapterKey(projectId, book->id.toString()),
+                            chapter.id.toString());
+        navigation.sync();
+        navigationSaved = navigation.status() == QSettings::NoError;
+    }
     analysisWorkbench_->setSelectedBook(book, chapterIndex);
     reloadAnalysisHistory();
     const auto metrics = DocumentMetrics::forChapter(chapter);
@@ -818,6 +879,10 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
                           .arg(book->chapters.size())
                           .arg(metrics.characterCount)
                           .arg(metrics.hanCharacterCount));
+    chapterStatus_->setToolTip(navigationSaved ? QString{}
+                                               : tr("章节位置未能保存，请检查本机配置目录权限。"));
+    if (!navigationSaved)
+        showStatusMessage(chapterStatus_->toolTip(), 5000);
 }
 
 void MainWindow::clearBookView() {

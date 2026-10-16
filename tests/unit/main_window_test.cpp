@@ -2,6 +2,7 @@
 #include "document_metrics.h"
 #include "main_window.h"
 #include "markdown_source_fixture.h"
+#include "novel_analysis_workbench.h"
 #include "repair_queue_widget.h"
 
 #include "loreforge/storage/book_repository.h"
@@ -10,6 +11,7 @@
 #include "loreforge/storage/repair_queue_repository.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QFontDatabase>
 #include <QLabel>
@@ -39,6 +41,8 @@ class MainWindowTest final : public QObject {
     void initTestCase() {
         qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
                 highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+        qputenv("LOREFORGE_NAVIGATION_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("navigation.ini")).toUtf8());
     }
     void displaysStoredWorkspaceWithoutReorderingDomainData();
     void reportsProjectOpenFailuresInTheInterface();
@@ -49,6 +53,8 @@ class MainWindowTest final : public QObject {
     void countsOnlyParagraphCharacters();
     void keepsMetadataBelowExplorerAndReaderFullHeight();
     void preparesChapterPreviewAndInvalidatesOnSelection();
+    void restoresChapterSelectionPerProjectFile();
+    void restoresBookAndFallsBackWhenChapterNoLongerExists();
 
   private:
     QTemporaryDir highlightSettings_;
@@ -103,6 +109,109 @@ loreforge::proofreading::ProofreadingCandidate storedRepairCandidate() {
 }
 
 } // namespace
+
+void MainWindowTest::restoresChapterSelectionPerProjectFile() {
+    QTemporaryDir source;
+    QTemporaryDir destination;
+    QVERIFY(loreforge::test::createMarkdownFixture(source.path()));
+    const auto firstPath = destination.filePath(QStringLiteral("first.loreforge"));
+    const auto secondPath = destination.filePath(QStringLiteral("second.loreforge"));
+    {
+        loreforge::app::MainWindow initial;
+        QVERIFY(initial.importMarkdownSource(source.path(), firstPath));
+    }
+    QVERIFY(QFile::copy(firstPath, secondPath)); // Same domain IDs, different project files.
+    QString expectedText;
+    {
+        loreforge::app::MainWindow window;
+        QVERIFY(window.openProjectFile(firstPath));
+        auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
+        selector->setCurrentIndex(2);
+        expectedText =
+            window.findChild<QTextBrowser*>(QStringLiteral("chapterReader"))->toPlainText();
+        QVERIFY(window.openProjectFile(secondPath));
+        QCOMPARE(selector->currentIndex(), 0);
+        selector->setCurrentIndex(1);
+        QVERIFY(window.openProjectFile(firstPath));
+        QCOMPARE(selector->currentIndex(), 2);
+        QVERIFY(window.openProjectFile(secondPath));
+        QCOMPARE(selector->currentIndex(), 1);
+    }
+    loreforge::app::MainWindow reopened;
+    auto* analysis = reopened.findChild<loreforge::app::NovelAnalysisWorkbench*>();
+    QSignalSpy requests(analysis, &loreforge::app::NovelAnalysisWorkbench::analysisRequested);
+    QSignalSpy continuations(analysis,
+                             &loreforge::app::NovelAnalysisWorkbench::continuationRequested);
+    QVERIFY(reopened.openProjectFile(firstPath));
+    QCOMPARE(
+        reopened.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"))->currentIndex(),
+        2);
+    const auto* tree = reopened.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    QCOMPARE(tree->currentItem(), tree->topLevelItem(2));
+    QCOMPARE(reopened.findChild<QTextBrowser*>(QStringLiteral("chapterReader"))->toPlainText(),
+             expectedText);
+    QCOMPARE(requests.size(), 0);
+    QCOMPARE(continuations.size(), 0);
+}
+
+void MainWindowTest::restoresBookAndFallsBackWhenChapterNoLongerExists() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("books.loreforge"));
+    auto database = createStoredFixture(path);
+    QVERIFY(database);
+    auto other = loreforge::test::handcraftedDocument();
+    other.id = loreforge::core::BookId::fromStableKey(QStringLiteral("navigation-second-book"));
+    other.metadata.title = QStringLiteral("Second navigation book");
+    other.metadata.sourceLocator = QStringLiteral("fixtures/navigation-second.txt");
+    for (int i = 0; i < other.chapters.size(); ++i)
+        other.chapters[i].id =
+            loreforge::core::ChapterId::fromStableKey(other.id.toString() + QString::number(i));
+    const auto storedOther =
+        loreforge::storage::BookRepository(*database).saveDocument(projectRecord().id, other);
+    QVERIFY2(!storedOther, storedOther ? qPrintable(storedOther->message + QStringLiteral(" ") +
+                                                    storedOther->technicalDetails)
+                                       : "");
+    database.reset();
+    {
+        loreforge::app::MainWindow window;
+        QVERIFY(window.openProjectFile(path));
+        auto* explorer = window.findChild<QTreeWidget*>(QStringLiteral("projectExplorer"));
+        auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
+        auto* project = explorer->topLevelItem(0);
+        QTreeWidgetItem* otherItem = nullptr;
+        for (int i = 0; i < project->childCount(); ++i)
+            if (project->child(i)->text(0) == other.metadata.title)
+                otherItem = project->child(i);
+        QVERIFY(otherItem);
+        explorer->setCurrentItem(otherItem);
+        selector->setCurrentIndex(1);
+    }
+    {
+        loreforge::app::MainWindow reopened;
+        QVERIFY(reopened.openProjectFile(path));
+        QCOMPARE(reopened.findChild<QTreeWidget*>(QStringLiteral("projectExplorer"))
+                     ->currentItem()
+                     ->text(0),
+                 other.metadata.title);
+        QCOMPARE(reopened.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"))
+                     ->currentIndex(),
+                 1);
+    }
+    auto opened = loreforge::storage::ProjectDatabase::open(path);
+    QVERIFY(std::holds_alternative<std::unique_ptr<loreforge::storage::ProjectDatabase>>(opened));
+    database = std::get<std::unique_ptr<loreforge::storage::ProjectDatabase>>(std::move(opened));
+    other.chapters.removeLast();
+    QVERIFY(!loreforge::storage::BookRepository(*database).saveDocument(projectRecord().id, other));
+    database.reset();
+    loreforge::app::MainWindow fallback;
+    QVERIFY(fallback.openProjectFile(path));
+    QCOMPARE(
+        fallback.findChild<QTreeWidget*>(QStringLiteral("projectExplorer"))->currentItem()->text(0),
+        other.metadata.title);
+    QCOMPARE(
+        fallback.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"))->currentIndex(),
+        0);
+}
 
 void MainWindowTest::importsMarkdownSourceAndReopensProject() {
     QTemporaryDir source;

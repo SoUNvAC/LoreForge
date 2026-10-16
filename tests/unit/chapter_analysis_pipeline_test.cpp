@@ -312,6 +312,8 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void initTestCase() {
         qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
                 highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+        qputenv("LOREFORGE_NAVIGATION_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("navigation.ini")).toUtf8());
     }
     void runsThreeRolesAndPersistsHistory();
     void refusesInvalidEvidenceAndTruncation_data();
