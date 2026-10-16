@@ -1,4 +1,5 @@
 #include "chapter_analysis_controller.h"
+#include "chapter_evidence.h"
 #include "main_window.h"
 #include "markdown_source_fixture.h"
 #include "novel_analysis_workbench.h"
@@ -80,10 +81,9 @@ struct Fixture {
 };
 
 QJsonObject analysisFor(const QJsonObject& user) {
-    const auto range = user.value(QStringLiteral("source_ranges")).toArray().at(1).toObject();
+    const auto range = user.value(QStringLiteral("source_blocks")).toArray().at(1).toObject();
     const QJsonArray evidence{
-        QJsonObject{{QStringLiteral("source_start"), range.value(QStringLiteral("source_start"))},
-                    {QStringLiteral("source_end"), range.value(QStringLiteral("source_end"))}}};
+        QJsonObject{{QStringLiteral("block_id"), range.value(QStringLiteral("block_id"))}}};
     const QJsonObject support{{QStringLiteral("inferred"), false},
                               {QStringLiteral("confidence"), 0.9},
                               {QStringLiteral("evidence"), evidence}};
@@ -103,11 +103,10 @@ QJsonObject analysisFor(const QJsonObject& user) {
 QJsonObject reviewFor(const QJsonObject& user, const QString& verdict = QStringLiteral("pass")) {
     QJsonArray issues;
     if (verdict != QStringLiteral("pass")) {
-        const auto range = user.value(QStringLiteral("source_ranges")).toArray().at(1).toObject();
-        issues.append(QJsonObject{
-            {QStringLiteral("reason"), QStringLiteral("这项结论需再核对。")},
-            {QStringLiteral("source_start"), range.value(QStringLiteral("source_start"))},
-            {QStringLiteral("source_end"), range.value(QStringLiteral("source_end"))}});
+        const auto range = user.value(QStringLiteral("source_blocks")).toArray().at(1).toObject();
+        issues.append(
+            QJsonObject{{QStringLiteral("reason"), QStringLiteral("这项结论需再核对。")},
+                        {QStringLiteral("block_id"), range.value(QStringLiteral("block_id"))}});
     }
     return {{QStringLiteral("chapter_id"), user.value(QStringLiteral("chapter_id"))},
             {QStringLiteral("verdict"), verdict},
@@ -295,7 +294,187 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void carriesAliasRulesAndPreservesSemanticVerdicts();
     void monitorShowsOnlyTheCurrentRequest();
     void acceptsJsonFallbackWithoutPretendingItIsSse();
+    void resolvesAllClaimsAndAuditsRawIds();
+    void refusesInvalidBlockReferences_data();
+    void refusesInvalidBlockReferences();
+    void refusesInvalidMappingAndRendersLegacyHistory();
 };
+
+void ChapterAnalysisPipelineTest::resolvesAllClaimsAndAuditsRawIds() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(
+        QByteArray("\xef\xbb\xbf") +
+        QStringLiteral("# 编号证据\r\n\r\n阿明（绰号老狼）站在码头😀，看见一封未拆信。\r\n")
+            .toUtf8()));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int role) {
+        if (role > 0)
+            return reviewFor(user, QStringLiteral("redo"));
+        auto output = analysisFor(user);
+        auto claim = output.value(QStringLiteral("summary")).toObject();
+        claim.insert(QStringLiteral("text"), QStringLiteral("阿明看见一封未拆信。"));
+        output.insert(QStringLiteral("summary"), claim);
+        output.insert(QStringLiteral("important_facts"), QJsonArray{claim});
+        output.insert(QStringLiteral("open_threads"), QJsonArray{claim});
+        auto named = claim;
+        named.remove(QStringLiteral("text"));
+        named.insert(QStringLiteral("name"), QStringLiteral("码头"));
+        output.insert(QStringLiteral("locations"), QJsonArray{named});
+        named.insert(QStringLiteral("name"), QStringLiteral("老狼"));
+        auto character = named;
+        character.insert(QStringLiteral("name"), QStringLiteral("阿明"));
+        character.insert(QStringLiteral("aliases"), QJsonArray{named});
+        output.insert(QStringLiteral("characters"), QJsonArray{character});
+        auto event = claim;
+        event.remove(QStringLiteral("text"));
+        event.insert(QStringLiteral("description"), QStringLiteral("阿明在码头看见信。"));
+        event.insert(QStringLiteral("participants"), QJsonArray{QStringLiteral("阿明")});
+        event.insert(QStringLiteral("location"), QStringLiteral("码头"));
+        output.insert(QStringLiteral("events"), QJsonArray{event});
+        return output;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), 3);
+    const auto entries = history(fixture);
+    QCOMPARE(entries.size(), 3);
+    for (int role = 0; role < 3; ++role) {
+        const auto& entry = entries[role];
+        QCOMPARE(entry.run.status, storage::LLMRunStatus::Succeeded);
+        const auto wire = entry.artifacts.parsedResponse->object();
+        const auto rawJson = inference::canonicalJson(wire);
+        QVERIFY(rawJson.contains("block_id"));
+        QVERIFY(!rawJson.contains("source_start"));
+        const auto resolved = app::resolveChapterEvidence(wire, entry.context.content, role > 0);
+        QVERIFY2(resolved.errors.isEmpty(), qPrintable(resolved.errors.join(QLatin1Char('\n'))));
+        QCOMPARE(entry.outcome.value(QStringLiteral("normalized_output")).toObject(),
+                 resolved.output);
+        QVERIFY(inference::canonicalJson(resolved.output).contains("source_start"));
+        QVERIFY(!inference::canonicalJson(resolved.output).contains("block_id"));
+        QVERIFY(entry.artifacts.rawResponse->contains("block_id"));
+    }
+    const auto userFor = [&](int role) {
+        return QJsonDocument::fromJson(server.requests[role]
+                                           .value(QStringLiteral("messages"))
+                                           .toArray()[1]
+                                           .toObject()
+                                           .value(QStringLiteral("content"))
+                                           .toString()
+                                           .toUtf8())
+            .object();
+    };
+    QCOMPARE(userFor(1).value(QStringLiteral("analysis")).toObject(),
+             entries[0].artifacts.parsedResponse->object());
+    QCOMPARE(userFor(2).value(QStringLiteral("checker")).toObject(),
+             entries[1].artifacts.parsedResponse->object());
+    app::NovelAnalysisWorkbench page;
+    page.setSelectedBook(&fixture.book, 0);
+    page.showHistory(entries, fixture.book.chapters[0].id.toString());
+    auto* tabs = page.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"));
+    for (int index = 0; index < 5; ++index)
+        QVERIFY(qobject_cast<QTreeWidget*>(tabs->widget(index))->topLevelItemCount() > 0);
+}
+
+void ChapterAnalysisPipelineTest::refusesInvalidBlockReferences_data() {
+    QTest::addColumn<int>("role");
+    QTest::addColumn<int>("mode");
+    QTest::newRow("analyzer-unknown") << 0 << 0;
+    QTest::newRow("checker-unknown") << 1 << 0;
+    QTest::newRow("reviewer-unknown") << 2 << 0;
+    QTest::newRow("duplicate-evidence") << 0 << 1;
+    QTest::newRow("raw-byte-offset") << 0 << 2;
+    QTest::newRow("wrong-chapter-reference") << 0 << 3;
+}
+
+void ChapterAnalysisPipelineTest::refusesInvalidBlockReferences() {
+    QFETCH(int, role);
+    QFETCH(int, mode);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    Server server;
+    server.makeOutput = [=](const QJsonObject& user, int index) {
+        auto output = index == 0 ? analysisFor(user) : reviewFor(user, QStringLiteral("redo"));
+        if (index != role)
+            return output;
+        if (role == 0) {
+            auto claim = output.value(QStringLiteral("summary")).toObject();
+            auto references = claim.value(QStringLiteral("evidence")).toArray();
+            auto reference = references[0].toObject();
+            if (mode == 0 || mode == 3)
+                reference.insert(QStringLiteral("block_id"),
+                                 mode == 0 ? QStringLiteral("b9999")
+                                           : QStringLiteral("other-chapter:b0002"));
+            if (mode == 2)
+                reference = {{QStringLiteral("source_start"), 1},
+                             {QStringLiteral("source_end"), 2}};
+            references[0] = reference;
+            if (mode == 1)
+                references.append(reference);
+            claim.insert(QStringLiteral("evidence"), references);
+            output.insert(QStringLiteral("summary"), claim);
+        } else {
+            auto issues = output.value(QStringLiteral("issues")).toArray();
+            auto issue = issues[0].toObject();
+            issue.insert(QStringLiteral("block_id"), QStringLiteral("b9999"));
+            issues[0] = issue;
+            output.insert(QStringLiteral("issues"), issues);
+        }
+        return output;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), role + 1);
+    const auto entries = history(fixture);
+    QCOMPARE(entries.last().run.status, storage::LLMRunStatus::Failed);
+    QVERIFY(entries.last().outcome.value(QStringLiteral("normalized_output")).toObject().isEmpty());
+    QVERIFY(entries.last().artifacts.parsedResponse.has_value());
+}
+
+void ChapterAnalysisPipelineTest::refusesInvalidMappingAndRendersLegacyHistory() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const auto user =
+        QJsonDocument::fromJson(fixture.preview.snapshot.content.value(QStringLiteral("messages"))
+                                    .toArray()[1]
+                                    .toObject()
+                                    .value(QStringLiteral("content"))
+                                    .toString()
+                                    .toUtf8())
+            .object();
+    const auto wire = analysisFor(user);
+    const auto resolved =
+        app::resolveChapterEvidence(wire, fixture.preview.snapshot.content, false);
+    QVERIFY(resolved.errors.isEmpty());
+    auto corrupt = fixture.preview.snapshot.content;
+    auto blocks = corrupt.value(QStringLiteral("blocks")).toArray();
+    auto block = blocks[1].toObject();
+    block.insert(QStringLiteral("start_byte"),
+                 block.value(QStringLiteral("start_byte")).toInteger() + 1);
+    blocks[1] = block;
+    corrupt.insert(QStringLiteral("blocks"), blocks);
+    QVERIFY(!app::resolveChapterEvidence(wire, corrupt, false).errors.isEmpty());
+    app::AnalysisHistoryEntry legacy;
+    legacy.run.status = storage::LLMRunStatus::Succeeded;
+    legacy.run.id = core::LLMRunId::fromStableKey(QStringLiteral("legacy-byte-output"));
+    legacy.artifacts.parsedResponse = QJsonDocument(resolved.output);
+    legacy.artifacts.validation = {inference::ValidationStatus::Valid, {}};
+    legacy.artifacts.outputSchemaVersion = 1;
+    legacy.artifacts.promptVersion = 2;
+    legacy.context = fixture.preview.snapshot;
+    legacy.context.content.insert(QStringLiteral("role_index"), 0);
+    legacy.context.content.insert(QStringLiteral("pipeline_id"),
+                                  QStringLiteral("legacy-byte-pipeline"));
+    app::NovelAnalysisWorkbench page;
+    page.setSelectedBook(&fixture.book, 0);
+    page.showHistory({legacy}, fixture.book.chapters[0].id.toString());
+    auto* tabs = page.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"));
+    QVERIFY(qobject_cast<QTreeWidget*>(tabs->widget(0))->topLevelItemCount() > 0);
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("analysisContinueTask"))->isHidden());
+}
 
 void ChapterAnalysisPipelineTest::monitorShowsOnlyTheCurrentRequest() {
     app::StreamMonitorWidget monitor;
@@ -431,8 +610,8 @@ void ChapterAnalysisPipelineTest::carriesAliasRulesAndPreservesSemanticVerdicts(
             QVERIFY(system.contains(QStringLiteral("逐个复核")));
             QVERIFY(system.contains(QStringLiteral("证据范围有效不代表语义正确")));
         }
-        QCOMPARE(entries[role].artifacts.promptVersion, 2);
-        QCOMPARE(entries[role].artifacts.outputSchemaVersion, 1);
+        QCOMPARE(entries[role].artifacts.promptVersion, 3);
+        QCOMPARE(entries[role].artifacts.outputSchemaVersion, 2);
         QCOMPARE(entries[role].run.status, storage::LLMRunStatus::Succeeded);
     }
     QCOMPARE(
@@ -852,11 +1031,10 @@ void ChapterAnalysisPipelineTest::refusesInvalidEvidenceAndTruncation() {
         auto evidence = summary.value(QStringLiteral("evidence")).toArray();
         auto range = evidence[0].toObject();
         if (mode == 0) {
-            range.insert(QStringLiteral("source_end"), 999999);
+            range.insert(QStringLiteral("block_id"), QStringLiteral("missing-block"));
         }
         if (mode == 1) {
-            range.insert(QStringLiteral("source_start"),
-                         range.value(QStringLiteral("source_start")).toInteger() + 1);
+            range.insert(QStringLiteral("source_start"), 1);
         }
         evidence[0] = range;
         summary.insert(QStringLiteral("evidence"), evidence);
@@ -1184,7 +1362,9 @@ void ChapterAnalysisPipelineTest::refusesTamperedSnapshots() {
 
 void ChapterAnalysisPipelineTest::locatesRepeatedEvidenceByByteRange() {
     Fixture fixture;
-    QVERIFY(fixture.initialize(QStringLiteral("# 重复\r\n\r\n重复。\r\n\r\n重复。\r\n").toUtf8()));
+    QVERIFY(
+        fixture.initialize(QByteArray("\xef\xbb\xbf") +
+                           QStringLiteral("# 重复😀\r\n\r\n重复。\r\n\r\n重复。\r\n").toUtf8()));
     Server server;
     server.makeOutput = [](const QJsonObject& user, int index) {
         if (index > 0) {
@@ -1192,12 +1372,10 @@ void ChapterAnalysisPipelineTest::locatesRepeatedEvidenceByByteRange() {
         }
         auto output = analysisFor(user);
         auto summary = output.value(QStringLiteral("summary")).toObject();
-        const auto range = user.value(QStringLiteral("source_ranges")).toArray().at(2).toObject();
-        summary.insert(
-            QStringLiteral("evidence"),
-            QJsonArray{QJsonObject{
-                {QStringLiteral("source_start"), range.value(QStringLiteral("source_start"))},
-                {QStringLiteral("source_end"), range.value(QStringLiteral("source_end"))}}});
+        const auto range = user.value(QStringLiteral("source_blocks")).toArray().at(2).toObject();
+        summary.insert(QStringLiteral("evidence"),
+                       QJsonArray{QJsonObject{
+                           {QStringLiteral("block_id"), range.value(QStringLiteral("block_id"))}}});
         output.insert(QStringLiteral("summary"), summary);
         return output;
     };

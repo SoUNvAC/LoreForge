@@ -3,9 +3,6 @@
 #include <QString>
 
 namespace loreforge::app {
-// Bump every affected immutable role prompt when these shared semantics change.
-inline constexpr int characterAliasPromptVersion = 2;
-
 inline QString characterAliasPolicy() {
     return QStringLiteral(
         "人物别名规则：指代某个人不等于这个人的固定别名。"

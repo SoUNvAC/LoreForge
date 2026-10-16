@@ -1,4 +1,6 @@
+#include "chapter_evidence.h"
 #include "chapter_preview.h"
+#include "loreforge/narrative/chapter_analyzer.h"
 #include "markdown_source_fixture.h"
 
 #include "loreforge/parser/markdown_source_parser.h"
@@ -67,6 +69,23 @@ void ChapterPreviewTest::capturesExactCurrentChapterWithProvenance() {
             .object();
     QCOMPARE(user.value(QStringLiteral("source")).toObject(), span);
     QCOMPARE(user.value(QStringLiteral("output_schema")).toObject(), preview.schema.schema);
+    QCOMPARE(preview.prompt.version, 3);
+    QCOMPARE(preview.schema.version, 2);
+    QVERIFY(!user.contains(QStringLiteral("source_ranges")));
+    const auto sourceBlocks = user.value(QStringLiteral("source_blocks")).toArray();
+    const auto savedBlocks = content.value(QStringLiteral("blocks")).toArray();
+    QCOMPARE(sourceBlocks.size(), savedBlocks.size());
+    for (qsizetype index = 0; index < sourceBlocks.size(); ++index) {
+        const auto block = sourceBlocks[index].toObject();
+        const auto storedBlock = savedBlocks[index].toObject();
+        QCOMPARE(block.value(QStringLiteral("block_id")),
+                 storedBlock.value(QStringLiteral("block_id")));
+        const auto startByte = storedBlock.value(QStringLiteral("start_byte")).toInteger();
+        const auto endByte = storedBlock.value(QStringLiteral("end_byte")).toInteger();
+        QCOMPARE(block.value(QStringLiteral("text")).toString().toUtf8(),
+                 loreforge::test::markdownFixtureChapter().mid(startByte, endByte - startByte));
+        QVERIFY(!block.contains(QStringLiteral("source_start")));
+    }
     QVERIFY(!preview.messagesJson.contains(QStringLiteral("页面元数据")));
     QVERIFY(!preview.messagesJson.contains(QStringLiteral("Second file.")));
     QVERIFY(!preview.messagesJson.contains(source.path()));
@@ -130,6 +149,15 @@ void ChapterPreviewTest::persistsImmutableVersionsAndReusesSnapshots() {
     loreforge::storage::ProjectRepository projects(*database);
     QVERIFY(
         !projects.create({projectId, QStringLiteral("Preview"), QDateTime::currentDateTimeUtc()}));
+    loreforge::storage::InferenceRepository legacy(*database);
+    const auto legacyPrompt = loreforge::inference::makePromptVersion(
+        preview.prompt.prompt, 2, QStringLiteral("旧版字节证据契约提示词"),
+        QDateTime::currentDateTimeUtc());
+    const auto legacySchema = loreforge::inference::makeOutputSchema(
+        preview.schema.id, preview.schema.name, 1,
+        loreforge::narrative::ChapterAnalyzer::outputSchema(), QDateTime::currentDateTimeUtc());
+    QVERIFY(!legacy.savePromptVersion(legacyPrompt));
+    QVERIFY(!legacy.saveOutputSchema(legacySchema));
     auto saved = Builder::store(*database, preview);
     QVERIFY2(std::holds_alternative<Preview>(saved),
              std::holds_alternative<Error>(saved)
@@ -156,7 +184,13 @@ void ChapterPreviewTest::persistsImmutableVersionsAndReusesSnapshots() {
     QVERIFY(std::holds_alternative<loreforge::inference::PromptVersion>(
         repository.findPromptVersion(preview.prompt.prompt.id, preview.prompt.version)));
     QVERIFY(std::holds_alternative<loreforge::inference::OutputSchema>(
-        repository.findOutputSchema(preview.schema.id, 1)));
+        repository.findOutputSchema(preview.schema.id, preview.schema.version)));
+    QCOMPARE(std::get<loreforge::inference::PromptVersion>(
+                 repository.findPromptVersion(preview.prompt.prompt.id, 2)),
+             legacyPrompt);
+    QCOMPARE(std::get<loreforge::inference::OutputSchema>(
+                 repository.findOutputSchema(preview.schema.id, 1)),
+             legacySchema);
 }
 
 void ChapterPreviewTest::rollsBackFailedStorage() {
@@ -173,7 +207,8 @@ void ChapterPreviewTest::rollsBackFailedStorage() {
     loreforge::storage::InferenceRepository repository(*database);
     QVERIFY(std::holds_alternative<Error>(
         repository.findPromptVersion(preview.prompt.prompt.id, preview.prompt.version)));
-    QVERIFY(std::holds_alternative<Error>(repository.findOutputSchema(preview.schema.id, 1)));
+    QVERIFY(std::holds_alternative<Error>(
+        repository.findOutputSchema(preview.schema.id, preview.schema.version)));
     QVERIFY(std::holds_alternative<Error>(repository.findContextSnapshot(preview.snapshot.id)));
 }
 

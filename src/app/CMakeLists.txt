@@ -2,6 +2,8 @@ qt_add_library(
     LoreForgeDesktopUi STATIC
     chapter_preview.cpp
     chapter_preview.h
+    chapter_evidence.cpp
+    chapter_evidence.h
     chapter_analysis_controller.cpp
     chapter_analysis_controller.h
     analysis_connection.h

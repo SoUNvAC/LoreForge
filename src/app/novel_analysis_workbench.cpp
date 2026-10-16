@@ -1,4 +1,5 @@
 #include "novel_analysis_workbench.h"
+#include "chapter_evidence.h"
 
 #include <QComboBox>
 #include <QFormLayout>
@@ -28,6 +29,19 @@ QString verdictText(const QString& value) {
     if (value == QStringLiteral("human"))
         return NovelAnalysisWorkbench::tr("需人工判断");
     return NovelAnalysisWorkbench::tr("未知");
+}
+QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry) {
+    if (!entry.artifacts.parsedResponse)
+        return {};
+    const auto output = entry.artifacts.parsedResponse->object();
+    if (entry.artifacts.outputSchemaVersion == 1)
+        return output; // Historical byte-range contracts remain read-only and renderable.
+    if (entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
+        return {};
+    return resolveChapterEvidence(
+               output, entry.context.content,
+               entry.context.content.value(QStringLiteral("role_index")).toInt() != 0)
+        .output;
 }
 void attachEvidence(QTreeWidgetItem* item, const QByteArray& bytes, qint64 base, qint64 start,
                     qint64 end) {
@@ -453,6 +467,15 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
     const auto* reviewer = roles[2];
     resumePipeline_ = pipeline;
     resumePrefix_ = completedRolePrefix(roles);
+    for (int role = 0; role < resumePrefix_; ++role) {
+        if (roles[role]->artifacts.outputSchemaVersion != chapterWireSchemaVersion ||
+            roles[role]->artifacts.promptVersion != chapterPromptVersion) {
+            resumePrefix_ = 0;
+            previewStatus_->setText(
+                tr("旧版证据契约：可查看历史；请从头重新分析，以使用段落编号证据。"));
+            break;
+        }
+    }
     legacyEndpoint_ = false;
     for (int role = 0; role < resumePrefix_; ++role) {
         legacyEndpoint_ = legacyEndpoint_ ||
@@ -464,7 +487,7 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
     }
     if (analyzer && analyzer->run.status == storage::LLMRunStatus::Succeeded &&
         analyzer->artifacts.parsedResponse) {
-        renderAnalysis(analyzer->artifacts.parsedResponse->object(), displayedSource_);
+        renderAnalysis(evidenceOutput(*analyzer), displayedSource_);
     }
     const auto good = [](const AnalysisHistoryEntry* value) {
         return value && value->run.status == storage::LLMRunStatus::Succeeded &&
@@ -483,7 +506,7 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
             continue;
         }
         const auto role = review->context.content.value(QStringLiteral("role_index")).toInt();
-        const auto output = review->artifacts.parsedResponse->object();
+        const auto output = evidenceOutput(*review);
         auto* parent = new QTreeWidgetItem(
             results_.last(),
             {tr("%1：%2").arg(role == 1 ? tr("复核员") : tr("LLM 审查员"),

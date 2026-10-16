@@ -63,11 +63,13 @@ HTTP 仅接受 localhost、回环地址、RFC1918 IPv4 或 IPv6 ULA 地址，且
 前置页面元数据不进入发送消息；正文范围内部的原始换行和 Markdown 标记完整保留。
 未引用的补充文件、其他章节、源目录绝对路径和 API 密钥不进入消息。
 原始章节可能包含个人信息；预览不是自动脱敏器，应由用户检查正文内容。
-消息提供块的 UTF-8 `source_start` / `source_end` 范围，配合现有证据 schema；
-分析输出只能引用范围，系统从快照提取引用并做确定性证据校验。
+消息提供 `source_blocks` 段落编号与原始块文本；模型证据只引用 `block_id`，不计算字节偏移。
+程序从不可变段落表确定性换算 UTF-8 范围，再执行既有领域与证据校验。
 
-快照保存在现有 `.loreforge` SQLite 项目的 `context_snapshots` 中；提示词 v2 和现有
-`ChapterAnalyzer` 输出 schema v1 分别写入 `prompt_versions` / `output_schemas`，无需更改数据库版本。
+快照保存在现有 `.loreforge` SQLite 项目的 `context_snapshots` 中；三角色提示词 v3 和网络输出
+schema v2 分别写入 `prompt_versions` / `output_schemas`，无需更改数据库版本。
+底层 `ChapterAnalyzer` 字节证据领域 schema 仍为 v1；网络输出通过本地适配器换算后使用它校验。
+完整原文保留，额外段落表会增加输入估算；超预算仍拒绝，不截断。旧版本历史保留，但必须从头分析才能使用新契约。
 记录项目/书/章 ID、导入 manifest 哈希、当前源文件哈希、章节原文字节哈希、块与来源范围、
 完整消息和预算。导入 manifest 哈希是历史记录，不宣称已重新核验整个源目录。
 前置页面元数据或末尾空白变化若不影响任何已导入块，可重新准备并记录新的文件哈希。
