@@ -179,6 +179,7 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
     if (busy_) {
         return;
     }
+    completedSuccessfully_ = false;
     if (connection.responseFormat != QStringLiteral("json_object") &&
         connection.responseFormat != QStringLiteral("json_schema")) {
         emit taskStatus(TaskState::Failed, QStringLiteral("分析必须使用 JSON 格式；未发送。"));
@@ -882,6 +883,7 @@ void ChapterAnalysisController::cancel() {
     }
 }
 void ChapterAnalysisController::stop(QString message, TaskState state) {
+    completedSuccessfully_ = !cancelled_ && role_ == 3 && state == TaskState::Success;
     busy_ = false;
     emit busyChanged(false);
     emit taskStatus(cancelled_ ? TaskState::Cancelled : state, message);

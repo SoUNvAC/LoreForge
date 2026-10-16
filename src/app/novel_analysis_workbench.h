@@ -6,6 +6,7 @@
 #include <functional>
 
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QListWidget;
 class QPlainTextEdit;
@@ -30,6 +31,10 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showHistory(QList<AnalysisHistoryEntry> history, QString chapterId);
     [[nodiscard]] const std::optional<ChapterPreview>& preview() const noexcept;
     void invalidatePreview();
+    [[nodiscard]] bool autoNextEnabled() const;
+    void stopAutoNext();
+    [[nodiscard]] bool prepareAutomaticChapter(bool dialogueOnly, int maximumTokens,
+                                               int reservedTokens);
     [[nodiscard]] bool dialogueOnly() const noexcept {
         return dialogueOnly_;
     }
@@ -41,6 +46,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void analysisRequested();
     void continuationRequested(QString pipelineId, bool allowLegacyEndpoint);
     void cancellationRequested();
+    void autoNextChanged(bool enabled);
     void metricsChanged(QString summary);
     void highlightImportedTextChanged(QString bookId, QString text);
     void highlightSourceChanged(QString bookId, QJsonObject source, QJsonObject analysis,
@@ -52,6 +58,8 @@ class NovelAnalysisWorkbench final : public QWidget {
     void updateButtons();
     void confirmAndStart(bool continuing, bool dialogueOnly = false);
     bool dialogueOnly_ = false;
+    QCheckBox* autoNext_ = nullptr;
+    bool autoNextAuthorized_ = false;
     QPushButton* dialogue_ = nullptr;
     QComboBox* chapters_ = nullptr;
     QSpinBox* contextLimit_ = nullptr;

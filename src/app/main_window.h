@@ -6,12 +6,14 @@
 #include "loreforge/context/context_types.h"
 #include "loreforge/proofreading/repair_queue.h"
 
+#include <QJsonObject>
 #include <QMainWindow>
 #include <QStringView>
 
 #include <optional>
 
 class QLabel;
+class QCloseEvent;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -38,6 +40,9 @@ class MainWindow final : public QMainWindow {
     void inspectContext(const context::ContextInspectorData& context);
     void inspectRepairQueue(QList<proofreading::RepairQueueItem> items);
 
+  protected:
+    void closeEvent(QCloseEvent* event) override;
+
   private slots:
     void chooseProjectFile();
     void chooseMarkdownSource();
@@ -58,6 +63,8 @@ class MainWindow final : public QMainWindow {
     void reloadRepairQueue();
     void reloadAnalysisHistory();
     void runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint);
+    void stopAutoAnalysis();
+    void scheduleNextChapter();
     void showStatusMessage(const QString& message, int timeoutMs = 0);
     [[nodiscard]] const document::Document* selectedBook() const;
 
@@ -83,6 +90,9 @@ class MainWindow final : public QMainWindow {
     qsizetype selectedProjectIndex_ = -1;
     qsizetype selectedBookIndex_ = -1;
     QString openedDatabasePath_;
+    QJsonObject activeAnalysis_;
+    quint64 autoNextGeneration_ = 0;
+    bool advancingAutomatically_ = false;
 };
 
 } // namespace loreforge::app

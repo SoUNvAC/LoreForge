@@ -1,6 +1,7 @@
 #include "novel_analysis_workbench.h"
 #include "chapter_evidence.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -113,6 +114,40 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     buttons->addWidget(prepare_);
     buttons->addWidget(cancel_);
     layout->addLayout(buttons);
+    autoNext_ = new QCheckBox(tr("自动分析下一章"), this);
+    autoNext_->setObjectName(QStringLiteral("analysisAutoNextChapter"));
+    autoNext_->setToolTip(tr("本章三角色通过后续跑下一章；取消勾选等本章完成后停。失败、需确认或到"
+                             "末章时停止，不自动重试。"));
+    layout->addWidget(autoNext_);
+    connect(autoNext_, &QCheckBox::toggled, this, [this](bool checked) {
+        autoNextAuthorized_ = false;
+        if (!checked) {
+            emit autoNextChanged(false);
+            return;
+        }
+        QMessageBox dialog(QMessageBox::Question, tr("确认自动分析后续章节"),
+                           tr("开启后，当你启动或继续本章任务并完成三角色检查时，将自动切换到本书下"
+                              "一章，按同一任务类型继续。\n"
+                              "授权范围为当前工程、当前书籍的剩余章节，每章最多三次 API "
+                              "请求，后续章节不再逐章弹出发送确认。\n"
+                              "取消勾选不会打断本章，本章结束后停止；失败、需确认、到末章或手动切换"
+                              "章节/书籍/工程时停止。\n"
+                              "不会自动重试，不修改原文；勾选状态不跨会话保存。确认开启？"),
+                           QMessageBox::NoButton, this);
+        dialog.setObjectName(QStringLiteral("analysisAutoNextConfirmation"));
+        auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
+        confirm->setObjectName(QStringLiteral("analysisAutoNextConfirm"));
+        auto* cancel = dialog.addButton(tr("取消"), QMessageBox::RejectRole);
+        dialog.setDefaultButton(cancel);
+        dialog.setEscapeButton(cancel);
+        dialog.exec();
+        if (dialog.clickedButton() != confirm || !autoNext_->isChecked()) {
+            autoNext_->setChecked(false);
+            return;
+        }
+        autoNextAuthorized_ = true;
+        emit autoNextChanged(true);
+    });
     previewStatus_ = new QLabel(tr("请先导入并选择 Markdown 章节。准备预览不会发送正文。"), this);
     previewStatus_->setObjectName(QStringLiteral("llmChapterPreviewStatus"));
     previewStatus_->setWordWrap(true);
@@ -253,6 +288,9 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly)
     QMessageBox dialog(
         QMessageBox::Question, tr("确认发送本章"),
         tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
+            (autoNextEnabled() ? tr("已开启自动分析下一章：本章三角色通过后，将按本次任务类型自动处"
+                                    "理本书余下章节，不再逐章确认。\n")
+                               : QString{}) +
             (dialogueOnly_ ? tr("本次任务：独立人物与对白分割；不提取剧情、摘要或伏笔。\n")
                            : tr("本次任务：原综合分析流程。\n")) +
             (continuing
@@ -287,10 +325,28 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly)
     }
 }
 
+bool NovelAnalysisWorkbench::autoNextEnabled() const {
+    return autoNextAuthorized_ && autoNext_->isChecked();
+}
+void NovelAnalysisWorkbench::stopAutoNext() {
+    autoNext_->setChecked(false);
+    autoNextAuthorized_ = false;
+}
+bool NovelAnalysisWorkbench::prepareAutomaticChapter(bool dialogueOnly, int maximumTokens,
+                                                     int reservedTokens) {
+    if (busy_ || !available_ || !autoNextEnabled())
+        return false;
+    dialogueOnly_ = dialogueOnly;
+    preview_.reset();
+    emit chapterPreviewRequested(maximumTokens, reservedTokens);
+    return preview_.has_value();
+}
+
 void NovelAnalysisWorkbench::updateButtons() {
     prepare_->setEnabled(available_ && !busy_);
     analyze_->setEnabled(available_ && !busy_);
     dialogue_->setEnabled(available_ && !busy_);
+    autoNext_->setEnabled(available_ || busy_);
     resume_->setVisible(resumePrefix_ == 1 || resumePrefix_ == 2);
     resume_->setEnabled(available_ && !busy_ && (resumePrefix_ == 1 || resumePrefix_ == 2));
     resume_->setText(resumePrefix_ == 2 ? tr("继续审查") : tr("继续复核与审查"));

@@ -13,6 +13,7 @@
 #include "repair_queue_widget.h"
 
 #include <QAction>
+#include <QCloseEvent>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDockWidget>
@@ -24,6 +25,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QScopedValueRollback>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -302,12 +304,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(
         analysisWorkbench_, &NovelAnalysisWorkbench::continuationRequested, this,
         [this](QString pipeline, bool legacy) { runChapterAnalysis(std::move(pipeline), legacy); });
-    connect(analysisWorkbench_, &NovelAnalysisWorkbench::cancellationRequested, analysisController_,
-            &ChapterAnalysisController::cancel);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::cancellationRequested, this, [this] {
+        stopAutoAnalysis();
+        analysisController_->cancel();
+    });
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::autoNextChanged, this,
+            [this](bool enabled) {
+                if (!enabled)
+                    ++autoNextGeneration_;
+            });
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::metricsChanged, llmWorkbench_,
             &LlmWorkbench::showAnalysisMetrics);
     connect(llmWorkbench_, &LlmWorkbench::configurationChanged, analysisWorkbench_,
             &NovelAnalysisWorkbench::invalidatePreview);
+    connect(llmWorkbench_, &LlmWorkbench::configurationChanged, this,
+            &MainWindow::stopAutoAnalysis);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::budgetsChanged, this,
+            &MainWindow::stopAutoAnalysis);
     connect(llmWorkbench_, &LlmWorkbench::analysisBudgetsLoaded, analysisWorkbench_,
             &NovelAnalysisWorkbench::restoreBudgets);
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::budgetsChanged, llmWorkbench_,
@@ -337,6 +350,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this](QString status) {
                 reloadAnalysisHistory();
                 analysisWorkbench_->showError(std::move(status));
+                scheduleNextChapter();
             });
     centralLayout->addWidget(pages, 1);
     auto* streamMonitor = new StreamMonitorWidget(central);
@@ -409,7 +423,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+    stopAutoAnalysis();
     analysisController_->cancel();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    stopAutoAnalysis();
+    analysisController_->cancel();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::showStatusMessage(const QString& message, int timeoutMs) {
@@ -688,6 +709,7 @@ void MainWindow::chooseProjectFile() {
 }
 
 void MainWindow::setWorkspace(StoredWorkspace workspace) {
+    stopAutoAnalysis();
     QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
     navigation.beginGroup(navigationGroup(workspace.databasePath));
     const auto lastProject = navigation.value(QStringLiteral("last_project")).toString();
@@ -830,6 +852,8 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
 }
 
 void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
+    if (!advancingAutomatically_)
+        stopAutoAnalysis();
     analysisController_->cancel();
     static_cast<void>(previous);
     const auto* book = selectedBook();
@@ -886,6 +910,7 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
 }
 
 void MainWindow::clearBookView() {
+    stopAutoAnalysis();
     analysisController_->cancel();
     analysisWorkbench_->setSelectedBook(nullptr, -1);
     llmWorkbench_->showAnalysisMetrics(tr("小说任务统计：尚未选择项目。"));
@@ -946,6 +971,7 @@ void MainWindow::startChapterAnalysis() {
 }
 
 void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint) {
+    ++autoNextGeneration_;
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || !analysisWorkbench_->preview() || analysisController_->busy()) {
@@ -955,12 +981,14 @@ void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndp
     analysisTaskId_ = QUuid::createUuid();
     taskIndicator_->report(analysisTaskId_, TaskState::Local, tr("正在检查分析请求"));
     if (!llmWorkbench_->flushConfiguration()) {
+        stopAutoAnalysis();
         analysisWorkbench_->showError(tr("工程 API 配置保存失败，未发送。"));
         taskIndicator_->report(analysisTaskId_, TaskState::Failed, tr("API 配置保存失败，未发送"));
         return;
     }
     const auto connection = llmWorkbench_->analysisConnection();
     if (const auto* error = std::get_if<QString>(&connection)) {
+        stopAutoAnalysis();
         analysisWorkbench_->showError(*error);
         taskIndicator_->report(analysisTaskId_, TaskState::Failed, *error);
         return;
@@ -974,14 +1002,80 @@ void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndp
     if (!std::holds_alternative<ChapterPreview>(checked) ||
         std::get<ChapterPreview>(checked).snapshot.id != preview.snapshot.id) {
         analysisWorkbench_->invalidatePreview();
+        stopAutoAnalysis();
         analysisWorkbench_->showError(tr("原文或章节已变化；未发送，请重新准备。"));
         taskIndicator_->report(analysisTaskId_, TaskState::Failed,
                                tr("原文已变化；未发送，请重新准备"));
         return;
     }
+    const auto chapterIndex = item->data(0, kChapterIndexRole).toLongLong();
+    activeAnalysis_ =
+        QJsonObject{{QStringLiteral("database_path"), openedDatabasePath_},
+                    {QStringLiteral("book_id"), book->id.toString()},
+                    {QStringLiteral("chapter_id"), book->chapters[chapterIndex].id.toString()},
+                    {QStringLiteral("chapter_index"), chapterIndex},
+                    {QStringLiteral("dialogue_only"),
+                     preview.snapshot.content.value(QStringLiteral("task_kind")).toString() ==
+                         QStringLiteral("dialogue")},
+                    {QStringLiteral("maximum_tokens"),
+                     preview.snapshot.content.value(QStringLiteral("maximum_tokens"))},
+                    {QStringLiteral("reserved_output_tokens"),
+                     preview.snapshot.content.value(QStringLiteral("reserved_output_tokens"))}};
     analysisController_->start(
         openedDatabasePath_, *book, item->data(0, kChapterIndexRole).toLongLong(), preview,
         std::get<AnalysisConnection>(connection), std::move(resumePipeline), allowLegacyEndpoint);
+}
+
+void MainWindow::stopAutoAnalysis() {
+    ++autoNextGeneration_;
+    analysisWorkbench_->stopAutoNext();
+}
+
+void MainWindow::scheduleNextChapter() {
+    if (!analysisWorkbench_->autoNextEnabled())
+        return;
+    if (!analysisController_->completedSuccessfully()) {
+        stopAutoAnalysis();
+        showStatusMessage(tr("自动续章已停止：本章失败、取消或需要确认；不会自动重试。"));
+        return;
+    }
+    const auto context = activeAnalysis_;
+    const auto generation = ++autoNextGeneration_;
+    QTimer::singleShot(0, this, [this, context, generation] {
+        if (generation != autoNextGeneration_ || !analysisWorkbench_->autoNextEnabled() ||
+            analysisController_->busy())
+            return;
+        const auto* book = selectedBook();
+        const auto* item = chapterTree_->currentItem();
+        const auto index = context.value(QStringLiteral("chapter_index")).toInteger(-1);
+        if (!book || !item ||
+            openedDatabasePath_ != context.value(QStringLiteral("database_path")).toString() ||
+            book->id.toString() != context.value(QStringLiteral("book_id")).toString() ||
+            index < 0 || index >= book->chapters.size() ||
+            item->data(0, kChapterIndexRole).toLongLong() != index ||
+            book->chapters[index].id.toString() !=
+                context.value(QStringLiteral("chapter_id")).toString()) {
+            stopAutoAnalysis();
+            return;
+        }
+        if (index + 1 >= book->chapters.size()) {
+            stopAutoAnalysis();
+            analysisWorkbench_->showError(tr("本章三角色通过；已到末章，自动分析结束。"));
+            return;
+        }
+        {
+            QScopedValueRollback<bool> transition(advancingAutomatically_, true);
+            chapterTree_->setCurrentItem(chapterTree_->topLevelItem(index + 1));
+        }
+        if (!analysisWorkbench_->prepareAutomaticChapter(
+                context.value(QStringLiteral("dialogue_only")).toBool(),
+                context.value(QStringLiteral("maximum_tokens")).toInt(),
+                context.value(QStringLiteral("reserved_output_tokens")).toInt())) {
+            stopAutoAnalysis();
+            return;
+        }
+        runChapterAnalysis({}, false);
+    });
 }
 
 void MainWindow::reloadAnalysisHistory() {

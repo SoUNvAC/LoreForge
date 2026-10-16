@@ -349,10 +349,172 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void independentlySegmentsAndContinuesWithoutRepeatingExtraction();
     void confirmsIndependentDialogueFromMainWindow();
     void preservesPartialExtractionWithoutPretendingItFullyPassed();
+    void automaticallyRunsNextChapter_data();
+    void automaticallyRunsNextChapter();
 
   private:
     QTemporaryDir highlightSettings_;
 };
+
+void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter_data() {
+    QTest::addColumn<int>("mode");
+    const QStringList cases{QStringLiteral("all-chapters"),
+                            QStringLiteral("uncheck-during-current"),
+                            QStringLiteral("enable-during-current"),
+                            QStringLiteral("http-failure"),
+                            QStringLiteral("needs-human"),
+                            QStringLiteral("partial-extraction"),
+                            QStringLiteral("uncheck-before-queued-next"),
+                            QStringLiteral("manual-chapter-change"),
+                            QStringLiteral("cancel-current"),
+                            QStringLiteral("reject-auto-consent"),
+                            QStringLiteral("api-configuration-change"),
+                            QStringLiteral("next-source-changed"),
+                            QStringLiteral("next-chapter-fails"),
+                            QStringLiteral("keeps-comprehensive-mode"),
+                            QStringLiteral("starts-at-last-chapter"),
+                            QStringLiteral("project-switch"),
+                            QStringLiteral("close-before-queued-next"),
+                            QStringLiteral("close-current-window"),
+                            QStringLiteral("budget-change")};
+    for (int mode = 0; mode < cases.size(); ++mode)
+        QTest::newRow(qPrintable(cases[mode])) << mode;
+}
+
+void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
+    QFETCH(int, mode);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const auto otherPath = fixture.destination.filePath(QStringLiteral("other-auto.loreforge"));
+    QVERIFY(QFile::copy(fixture.path, otherPath));
+    Server server;
+    app::MainWindow window;
+    QVERIFY(window.openProjectFile(fixture.path));
+    auto* llm = window.findChild<QWidget*>(QStringLiteral("llmWorkbench"));
+    llm->findChild<QLineEdit*>(QStringLiteral("llmEndpoint"))
+        ->setText(server.connection().options.endpoint.toString());
+    llm->findChild<QLineEdit*>(QStringLiteral("llmModelId"))
+        ->setText(QStringLiteral("fixture-model"));
+    llm->findChild<QLineEdit*>(QStringLiteral("llmApiKey"))
+        ->setText(QStringLiteral("auto-chapter-fixture-key"));
+    llm->findChild<QCheckBox*>(QStringLiteral("llmAllowHttp"))->setChecked(true);
+    llm->findChild<QComboBox*>(QStringLiteral("llmResponseFormat"))
+        ->setCurrentText(QStringLiteral("json_object"));
+    auto* flag = window.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"));
+    auto* controller = window.findChild<Controller*>();
+    auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
+    QVERIFY(flag);
+    QVERIFY(!flag->isChecked());
+    if (mode == 14)
+        selector->setCurrentIndex(2);
+    const auto enable = [&](bool accept) {
+        QTimer::singleShot(0, &window, [&window, accept] {
+            auto* dialog =
+                window.findChild<QMessageBox*>(QStringLiteral("analysisAutoNextConfirmation"));
+            QVERIFY(dialog);
+            if (accept)
+                dialog->findChild<QPushButton*>(QStringLiteral("analysisAutoNextConfirm"))->click();
+            else
+                dialog->reject();
+        });
+        flag->setChecked(true);
+    };
+    if (mode != 2)
+        enable(mode != 9);
+    QCOMPARE(server.requests.size(), 0);
+    bool enabledWhileBusy = false;
+    server.makeOutput = [&](const QJsonObject& user, int index) -> QJsonObject {
+        if (index == 0) {
+            if (mode == 1)
+                flag->setChecked(false);
+            if (mode == 2) {
+                enabledWhileBusy = controller->busy() && flag->isEnabled();
+                enable(true);
+            }
+            if (mode == 8)
+                window.findChild<QPushButton*>(QStringLiteral("analysisCancelTask"))->click();
+            if (mode == 17)
+                window.close();
+            if (mode == 18)
+                window.findChild<QSpinBox*>(QStringLiteral("llmChapterOutputBudget"))
+                    ->setValue(4352);
+            if (mode == 10)
+                llm->findChild<QLineEdit*>(QStringLiteral("llmModelId"))
+                    ->setText(QStringLiteral("changed-fixture-model"));
+        }
+        if (mode == 12 && index == 3)
+            server.status = 500;
+        if (user.contains(QStringLiteral("analysis")))
+            return reviewFor(user, mode == 4 ? QStringLiteral("human") : QStringLiteral("pass"));
+        auto output = analysisFor(user);
+        if (mode == 5) {
+            auto parts = output.value(QStringLiteral("segments")).toArray();
+            parts.append(QJsonObject{{QStringLiteral("first_unit"), QStringLiteral("u9999")},
+                                     {QStringLiteral("last_unit"), QStringLiteral("u9999")},
+                                     {QStringLiteral("speaker"), QStringLiteral("她")}});
+            output.insert(QStringLiteral("segments"), parts);
+        }
+        return output;
+    };
+    if (mode == 3)
+        server.status = 500;
+    QSignalSpy finished(controller, &Controller::finished);
+    connect(controller, &Controller::finished, &window, [&] {
+        if (finished.size() != 1)
+            return;
+        if (mode == 6)
+            flag->setChecked(false);
+        if (mode == 7)
+            selector->setCurrentIndex(1);
+        if (mode == 11)
+            QVERIFY(test::writeMarkdownFixtureFile(
+                fixture.source.path(), QStringLiteral("02/002.md"),
+                QByteArray("# Changed\n\nNot the imported text.\n")));
+        if (mode == 15)
+            QVERIFY(window.openProjectFile(otherPath));
+        if (mode == 16)
+            window.close();
+    });
+    QTimer::singleShot(0, &window, [&window] {
+        auto* dialog = window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation"));
+        QVERIFY(dialog);
+        dialog->findChild<QPushButton*>(QStringLiteral("analysisConfirmSend"))->click();
+    });
+    window
+        .findChild<QPushButton*>(mode == 13 ? QStringLiteral("llmAnalyzeChapter")
+                                            : QStringLiteral("dialogueSegmentChapter"))
+        ->click();
+    const int expectedChapters = (mode == 0 || mode == 2 || mode == 13) ? 3 : mode == 12 ? 2 : 1;
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), expectedChapters, 10000);
+    QTRY_VERIFY(!flag->isChecked());
+    QVERIFY(!controller->busy());
+    QTest::qWait(30);
+    const int expectedRequests = (mode == 0 || mode == 2 || mode == 13)   ? 9
+                                 : (mode == 3 || mode == 8 || mode == 17) ? 1
+                                 : mode == 12                             ? 4
+                                                                          : 3;
+    QCOMPARE(server.requests.size(), expectedRequests);
+    if (mode == 2)
+        QVERIFY(enabledWhileBusy);
+    if (mode == 0 || mode == 2 || mode == 13 || mode == 14)
+        QCOMPARE(selector->currentIndex(), 2);
+    if (mode == 7 || mode == 11 || mode == 12)
+        QCOMPARE(selector->currentIndex(), 1);
+    if (mode != 15) {
+        const auto entries = history(fixture);
+        QCOMPARE(entries.size(), expectedRequests);
+        for (const auto& entry : entries) {
+            const bool dialogue =
+                entry.context.content.value(QStringLiteral("task_kind")).toString() ==
+                QStringLiteral("dialogue");
+            QCOMPARE(dialogue, mode != 13);
+        }
+    }
+    app::MainWindow reopened;
+    QVERIFY(reopened.openProjectFile(fixture.path));
+    QVERIFY(
+        !reopened.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"))->isChecked());
+}
 
 void ChapterAnalysisPipelineTest::preservesPartialExtractionWithoutPretendingItFullyPassed() {
     Fixture fixture;

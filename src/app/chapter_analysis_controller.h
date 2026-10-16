@@ -30,6 +30,9 @@ class ChapterAnalysisController final : public QObject {
     explicit ChapterAnalysisController(QObject* parent = nullptr);
     ~ChapterAnalysisController() override;
     [[nodiscard]] bool busy() const noexcept;
+    [[nodiscard]] bool completedSuccessfully() const noexcept {
+        return completedSuccessfully_;
+    }
     void start(QString databasePath, document::Document book, qsizetype chapterIndex,
                ChapterPreview preview, AnalysisConnection connection, QString resumePipeline = {},
                bool allowLegacyEndpoint = false);
@@ -68,6 +71,7 @@ class ChapterAnalysisController final : public QObject {
     QUuid requestId_;
     int role_ = 0;
     bool busy_ = false;
+    bool completedSuccessfully_ = false;
     bool cancelled_ = false;
     bool persisted_ = false;
     bool closing_ = false;
