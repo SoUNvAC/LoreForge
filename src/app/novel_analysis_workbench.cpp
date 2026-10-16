@@ -681,7 +681,6 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
                            part.value(QStringLiteral("source_start")).toInteger(),
                            part.value(QStringLiteral("source_end")).toInteger());
         }
-        uncertain->setExpanded(true);
         for (const auto& issueValue : output.value(QStringLiteral("extraction_issues")).toArray()) {
             const auto issue = issueValue.toObject();
             new QTreeWidgetItem(uncertain,
@@ -690,6 +689,10 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
                                      .arg(issue.value(QStringLiteral("message")).toString()),
                                  tr("定位/归属提示")});
         }
+        if (uncertain->childCount() == 0)
+            delete uncertain;
+        else
+            uncertain->setExpanded(true);
         for (int i = 1; i <= 3; ++i)
             new QTreeWidgetItem(
                 results_[i],

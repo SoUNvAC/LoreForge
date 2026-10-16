@@ -391,6 +391,11 @@ void ChapterAnalysisPipelineTest::preservesPartialExtractionWithoutPretendingItF
     QVERIFY(page.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"))
                 ->text()
                 .contains(QStringLiteral("部分提取")));
+    const auto* people = qobject_cast<QTreeWidget*>(
+        page.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"))->widget(0));
+    QCOMPARE(people->topLevelItemCount(), 2);
+    QCOMPARE(people->topLevelItem(1)->text(0), QStringLiteral("待确认"));
+    QVERIFY(people->topLevelItem(1)->childCount() > 0);
 }
 
 void ChapterAnalysisPipelineTest::confirmsIndependentDialogueFromMainWindow() {
@@ -531,6 +536,21 @@ void ChapterAnalysisPipelineTest::independentlySegmentsAndContinuesWithoutRepeat
         page.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"))->widget(0));
     QCOMPARE(people->topLevelItem(0)->childCount(), 4);
     QVERIFY(people->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("……")));
+    QCOMPARE(people->topLevelItemCount(), 1); // No empty pending group.
+    auto unknownEntries = entries;
+    auto wire = unknownEntries[0].artifacts.parsedResponse->object();
+    auto parts = wire.value(QStringLiteral("segments")).toArray();
+    auto first = parts[0].toObject();
+    first.insert(QStringLiteral("speaker"), QString{});
+    parts[0] = first;
+    wire.insert(QStringLiteral("segments"), parts);
+    unknownEntries[0].artifacts.parsedResponse = QJsonDocument(wire);
+    page.showHistory(unknownEntries, fixture.book.chapters[0].id.toString());
+    QCOMPARE(people->topLevelItemCount(), 2);
+    QCOMPARE(people->topLevelItem(1)->text(0), QStringLiteral("待确认"));
+    QCOMPARE(people->topLevelItem(1)->childCount(), 1);
+    page.showHistory(entries, fixture.book.chapters[0].id.toString());
+    QCOMPARE(people->topLevelItemCount(), 1);
 }
 
 void ChapterAnalysisPipelineTest::refusesCoarseNarrationWithoutForcingQuotesToDialogue() {
