@@ -425,6 +425,10 @@ QString ChapterAnalysisController::loadContinuation(const QString& pipeline,
                 return QStringLiteral("分析员结果的证据重新校验失败；未发送。");
         } else if (role != 0) {
             if (user.value(QStringLiteral("analysis")).toObject() != outputs_.first() ||
+                (dialogueOnly && user.value(QStringLiteral("analysis_mapping_issues")).toArray() !=
+                                     resolveDialogue(outputs_.first(), current)
+                                         .output.value(QStringLiteral("extraction_issues"))
+                                         .toArray()) ||
                 !validateReview(resolved.output, source,
                                 book_.chapters[chapterIndex_].id.toString())
                      .isEmpty())
@@ -508,8 +512,10 @@ void ChapterAnalysisController::nextRole() {
                 "是否正确；"
                 "不能把‘老子’当父亲别名，不能因提到母亲就归给母亲。检查是否遗漏沉默回应‘……’、哭声、"
                 "结巴和未完发言。"
-                "引号引用词语或心理不自动算对白，无法确定不强猜。原文有发言却全为 narration "
-                "时不得敷衍 pass。"
+                "只提取发声，不要求覆盖标题、叙述、空白或所有编号；未提取不等于旁白，也不单凭跳号判"
+                "错。"
+                "引号引用词语或心理不自动算对白，无法确定不强猜。按原文检查真正漏掉的发声。"
+                "analysis_mapping_issues 是本地定位提示；若非空须核对具体条目，不能直接 pass。"
                 "仅返回 output_schema 的 JSON，chapter_id 原样返回。pass 必须 issues "
                 "为空；有错误给 redo，无法判断给 human。"
                 "issues 每项 reason 写清 unit_id、错误类型/人物和建议改为什么；block_id 取 "
@@ -535,8 +541,13 @@ void ChapterAnalysisController::nextRole() {
                                                 .toUtf8())
                         .object();
         user.insert(QStringLiteral("analysis"), outputs_.first());
-        if (dialogueOnly)
+        if (dialogueOnly) {
             user.insert(QStringLiteral("source_blocks"), dialogueReviewBlocks(content));
+            user.insert(QStringLiteral("analysis_mapping_issues"),
+                        resolveDialogue(outputs_.first(), source_.snapshot.content)
+                            .output.value(QStringLiteral("extraction_issues"))
+                            .toArray());
+        }
         if (role_ == 2) {
             user.insert(QStringLiteral("checker"), outputs_.at(1));
         }
@@ -777,7 +788,11 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         {QStringLiteral("role_index"), role_},
         {QStringLiteral("usage_known"), usageKnown},
         {QStringLiteral("normalization_format"),
-         QStringLiteral("loreforge-block-evidence-resolved-v1")},
+         source_.snapshot.content.value(QStringLiteral("task_kind")).toString() ==
+                     QStringLiteral("dialogue") &&
+                 role_ == 0
+             ? QStringLiteral("loreforge-sparse-utterances-resolved-v1")
+             : QStringLiteral("loreforge-block-evidence-resolved-v1")},
         {QStringLiteral("normalized_output"), normalized},
         {QStringLiteral("response_transport"), responseTransport},
         {QStringLiteral("response_record_format"),
@@ -834,6 +849,21 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     }
     const auto checker = outputs_[1].value(QStringLiteral("verdict")).toString();
     const auto reviewer = outputs_[2].value(QStringLiteral("verdict")).toString();
+    const auto mappingIssues =
+        source_.snapshot.content.value(QStringLiteral("task_kind")).toString() ==
+                QStringLiteral("dialogue")
+            ? resolveDialogue(outputs_.first(), source_.snapshot.content)
+                  .output.value(QStringLiteral("extraction_issues"))
+                  .toArray()
+            : QJsonArray{};
+    if (!mappingIssues.isEmpty()) {
+        stop(QStringLiteral(
+                 "部分提取可查看；%1 "
+                 "条定位/归属问题需确认，未受影响的发声已保留。复核意见不能消除本地定位问题。")
+                 .arg(mappingIssues.size()),
+             TaskState::Attention);
+        return;
+    }
     const auto conclusion = reviewConclusion(outputs_[1], outputs_[2]);
     stop(conclusion, checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
                          ? TaskState::Success

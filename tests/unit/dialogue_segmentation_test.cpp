@@ -11,6 +11,7 @@ QJsonObject snapshot() {
                              {QStringLiteral("start_byte"), 3},
                              {QStringLiteral("end_byte"), 3 + text.toUtf8().size()}};
     return {{QStringLiteral("chapter_id"), QStringLiteral("chapter-test")},
+            {QStringLiteral("schema_version"), chapterWireSchemaVersion},
             {QStringLiteral("task_kind"), QStringLiteral("dialogue")},
             {QStringLiteral("source"), source},
             {QStringLiteral("segmentation_units"), dialogueUnits(source)}};
@@ -21,11 +22,11 @@ QJsonObject output(const QJsonObject& snap) {
         const auto unit = value.toObject();
         const auto text = unit.value(QStringLiteral("text")).toString();
         const auto quote = text.startsWith(QChar(0x201c));
+        if (!quote)
+            continue;
         segments.append(
             QJsonObject{{QStringLiteral("first_unit"), unit.value(QStringLiteral("unit_id"))},
                         {QStringLiteral("last_unit"), unit.value(QStringLiteral("unit_id"))},
-                        {QStringLiteral("kind"),
-                         quote ? QStringLiteral("dialogue") : QStringLiteral("narration")},
                         {QStringLiteral("speaker"),
                          quote ? (text.contains(QStringLiteral("药")) ? QStringLiteral("母亲")
                                                                       : QStringLiteral("苏雨晴"))
@@ -44,6 +45,42 @@ QJsonObject output(const QJsonObject& snap) {
 class DialogueSegmentationTest : public QObject {
     Q_OBJECT
   private slots:
+    void skipsNarrationAndTrailingPunctuationWithoutLosingSource() {
+        auto snap = snapshot();
+        auto source = snap.value(QStringLiteral("source")).toObject();
+        const auto text = source.value(QStringLiteral("utf8")).toString() + QStringLiteral("……");
+        source.insert(QStringLiteral("utf8"), text);
+        source.insert(QStringLiteral("end_byte"), 3 + text.toUtf8().size());
+        snap.insert(QStringLiteral("source"), source);
+        snap.insert(QStringLiteral("segmentation_units"), dialogueUnits(source));
+        auto wire = output(snap);
+        auto parts = wire.value(QStringLiteral("segments")).toArray();
+        QJsonArray reversed;
+        for (int i = parts.size() - 1; i >= 0; --i)
+            reversed.append(parts[i]);
+        wire.insert(QStringLiteral("segments"), reversed);
+        const auto mapped = resolveDialogue(wire, snap);
+        QVERIFY(mapped.errors.isEmpty());
+        QVERIFY(mapped.output.value(QStringLiteral("extraction_issues")).toArray().isEmpty());
+        const auto normalized = mapped.output.value(QStringLiteral("segments")).toArray();
+        QCOMPARE(normalized.last().toObject().value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("unassigned"));
+        QVERIFY(normalized.last()
+                    .toObject()
+                    .value(QStringLiteral("text"))
+                    .toString()
+                    .endsWith(QStringLiteral("……")));
+        int turns = 0;
+        QString restored;
+        for (const auto& value : normalized) {
+            const auto part = value.toObject();
+            restored += part.value(QStringLiteral("text")).toString();
+            if (part.value(QStringLiteral("kind")).toString() == QStringLiteral("dialogue"))
+                ++turns;
+        }
+        QCOMPARE(turns, 5);
+        QCOMPARE(restored, text);
+    }
     void restoresExactTextAndSeparateSpeakers() {
         const auto snap = snapshot();
         const auto wire = output(snap);
@@ -78,7 +115,7 @@ class DialogueSegmentationTest : public QObject {
         QCOMPARE(repeated.size(), 2);
         QVERIFY(repeated[0] != repeated[1]);
     }
-    void rejectsMissingRepeatedInventedAndTamperedUnits() {
+    void retainsGoodEntriesAndReportsBadEntries() {
         const auto snap = snapshot();
         const auto valid = output(snap);
         for (int mode = 0; mode < 7; ++mode) {
@@ -92,9 +129,8 @@ class DialogueSegmentationTest : public QObject {
             if (mode == 2)
                 first.insert(QStringLiteral("last_unit"), QStringLiteral("u9999"));
             if (mode == 3)
-                first.insert(QStringLiteral("speaker"), QStringLiteral("母亲"));
+                first.insert(QStringLiteral("first_unit"), QStringLiteral("u9999"));
             if (mode == 4) {
-                first.insert(QStringLiteral("kind"), QStringLiteral("dialogue"));
                 first.insert(QStringLiteral("speaker"), QStringLiteral("捏造人物"));
             }
             if (mode == 5)
@@ -104,8 +140,22 @@ class DialogueSegmentationTest : public QObject {
                 first.insert(QStringLiteral("first_unit"), QStringLiteral("u2"));
             parts[0] = first;
             wire.insert(QStringLiteral("segments"), parts);
-            QVERIFY2(!resolveDialogue(wire, snap).errors.isEmpty(),
-                     qPrintable(QString::number(mode)));
+            const auto mapped = resolveDialogue(wire, snap);
+            QVERIFY2(mapped.errors.isEmpty(), qPrintable(mapped.errors.join('\n')));
+            if (mode == 0)
+                QVERIFY(
+                    mapped.output.value(QStringLiteral("extraction_issues")).toArray().isEmpty());
+            else
+                QVERIFY2(
+                    !mapped.output.value(QStringLiteral("extraction_issues")).toArray().isEmpty(),
+                    qPrintable(QString::number(mode)));
+            QString restored;
+            for (const auto& part : mapped.output.value(QStringLiteral("segments")).toArray())
+                restored += part.toObject().value(QStringLiteral("text")).toString();
+            QCOMPARE(restored, snap.value(QStringLiteral("source"))
+                                   .toObject()
+                                   .value(QStringLiteral("utf8"))
+                                   .toString());
         }
         auto corrupt = snap;
         auto units = corrupt.value(QStringLiteral("segmentation_units")).toArray();
@@ -119,28 +169,29 @@ class DialogueSegmentationTest : public QObject {
         const auto snap = snapshot();
         auto wire = output(snap);
         auto parts = wire.value(QStringLiteral("segments")).toArray();
-        auto quote = parts[2].toObject();
-        // Find an actual quotation rather than assuming an index for CRLF units.
-        const auto units = snap.value(QStringLiteral("segmentation_units")).toArray();
-        for (int i = 0; i < units.size(); ++i) {
-            if (!units[i]
+        auto quote = parts[0].toObject();
+        quote.insert(QStringLiteral("speaker"), QString{});
+        parts[0] = quote;
+        wire.insert(QStringLiteral("segments"), parts);
+        const auto unknown = resolveDialogue(wire, snap);
+        QVERIFY(unknown.errors.isEmpty());
+        int pending = 0;
+        for (const auto& value : unknown.output.value(QStringLiteral("segments")).toArray())
+            if (value.toObject().value(QStringLiteral("kind")).toString() ==
+                    QStringLiteral("dialogue") &&
+                value.toObject().value(QStringLiteral("speaker")).toString().isEmpty())
+                ++pending;
+        QCOMPARE(pending, 1);
+        wire.insert(QStringLiteral("segments"), QJsonArray{});
+        const auto empty = resolveDialogue(wire, snap);
+        QVERIFY(empty.errors.isEmpty());
+        QCOMPARE(empty.output.value(QStringLiteral("segments")).toArray().size(), 1);
+        QCOMPARE(empty.output.value(QStringLiteral("segments"))
+                     .toArray()[0]
                      .toObject()
-                     .value(QStringLiteral("text"))
-                     .toString()
-                     .startsWith(QChar(0x201c)))
-                continue;
-            quote = parts[i].toObject();
-            quote.insert(QStringLiteral("kind"), QStringLiteral("unknown"));
-            quote.insert(QStringLiteral("speaker"), QString{});
-            parts[i] = quote;
-            wire.insert(QStringLiteral("segments"), parts);
-            QVERIFY(resolveDialogue(wire, snap).errors.isEmpty());
-            quote.insert(QStringLiteral("kind"), QStringLiteral("narration"));
-            parts[i] = quote;
-            wire.insert(QStringLiteral("segments"), parts);
-            QVERIFY(resolveDialogue(wire, snap).errors.isEmpty());
-            break;
-        }
+                     .value(QStringLiteral("kind"))
+                     .toString(),
+                 QStringLiteral("unassigned"));
         QVERIFY(dialoguePrompt().contains(QStringLiteral("呜……呜……")));
         QVERIFY(dialoguePrompt().contains(QStringLiteral("相同")));
     }

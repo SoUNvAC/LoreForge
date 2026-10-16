@@ -37,6 +37,7 @@ QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry, QStringList* error
     if (entry.artifacts.outputSchemaVersion == 1)
         return output; // Historical byte-range contracts remain read-only and renderable.
     if (entry.artifacts.outputSchemaVersion != 2 && entry.artifacts.outputSchemaVersion != 3 &&
+        entry.artifacts.outputSchemaVersion != 4 &&
         entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
         return {};
     const auto resolved = resolveChapterEvidence(
@@ -531,7 +532,11 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
     if (good(analyzer)) {
         QStringList segmentationErrors;
         const auto output = evidenceOutput(*analyzer, &segmentationErrors);
-        const auto finalPass = good(checker) && good(reviewer) &&
+        const auto localIssues = output.value(QStringLiteral("extraction_issues")).toArray();
+        if (!localIssues.isEmpty())
+            taskStatus_->setText(tr("部分提取可查看；%1 条定位/归属问题需确认，其他片段已保留。")
+                                     .arg(localIssues.size()));
+        const auto finalPass = good(checker) && good(reviewer) && localIssues.isEmpty() &&
                                checker->artifacts.parsedResponse->object()
                                        .value(QStringLiteral("verdict"))
                                        .toString() == QStringLiteral("pass") &&
@@ -544,6 +549,9 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
             !segmentationErrors.isEmpty()
                 ? tr("所选历史不满足正文分割校验：%1\n请从头重新分析；不会将其作为有效分割显示。")
                       .arg(segmentationErrors.join(QLatin1Char('\n')))
+            : !localIssues.isEmpty()
+                ? tr("部分结果：%1 条定位/归属问题待确认；未受影响的发声可查看。")
+                      .arg(localIssues.size())
             : finalPass
                 ? tr("三角色流程通过（同模型意见）；显示正文分割与说话人归属，请核对模型判断。")
                 : tr("候选预览：后续角色未完成、存在分歧或建议重做；不是最终确认结果。"));
@@ -674,6 +682,14 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
                            part.value(QStringLiteral("source_end")).toInteger());
         }
         uncertain->setExpanded(true);
+        for (const auto& issueValue : output.value(QStringLiteral("extraction_issues")).toArray()) {
+            const auto issue = issueValue.toObject();
+            new QTreeWidgetItem(uncertain,
+                                {tr("提取条目 %1：%2")
+                                     .arg(issue.value(QStringLiteral("entry_index")).toInt() + 1)
+                                     .arg(issue.value(QStringLiteral("message")).toString()),
+                                 tr("定位/归属提示")});
+        }
         for (int i = 1; i <= 3; ++i)
             new QTreeWidgetItem(
                 results_[i],

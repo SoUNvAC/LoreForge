@@ -90,12 +90,12 @@ QJsonObject analysisFor(const QJsonObject& user) {
             const auto unit = value.toObject();
             const auto quoted =
                 unit.value(QStringLiteral("text")).toString().startsWith(QChar(0x201c));
-            segments.append(QJsonObject{
-                {QStringLiteral("first_unit"), unit.value(QStringLiteral("unit_id"))},
-                {QStringLiteral("last_unit"), unit.value(QStringLiteral("unit_id"))},
-                {QStringLiteral("kind"),
-                 quoted ? QStringLiteral("dialogue") : QStringLiteral("narration")},
-                {QStringLiteral("speaker"), quoted ? QStringLiteral("她") : QString{}}});
+            if (!quoted)
+                continue;
+            segments.append(
+                QJsonObject{{QStringLiteral("first_unit"), unit.value(QStringLiteral("unit_id"))},
+                            {QStringLiteral("last_unit"), unit.value(QStringLiteral("unit_id"))},
+                            {QStringLiteral("speaker"), QStringLiteral("她")}});
         }
         return {{QStringLiteral("chapter_id"), user.value(QStringLiteral("chapter_id"))},
                 {QStringLiteral("characters"),
@@ -346,10 +346,52 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesCoarseNarrationWithoutForcingQuotesToDialogue();
     void independentlySegmentsAndContinuesWithoutRepeatingExtraction();
     void confirmsIndependentDialogueFromMainWindow();
+    void preservesPartialExtractionWithoutPretendingItFullyPassed();
 
   private:
     QTemporaryDir highlightSettings_;
 };
+
+void ChapterAnalysisPipelineTest::preservesPartialExtractionWithoutPretendingItFullyPassed() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(
+        QStringLiteral("# 部分提取\n\n“别动。”她停下。\n“……”她低头。\n……").toUtf8(), true));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int) {
+        if (user.contains(QStringLiteral("analysis")))
+            return reviewFor(user);
+        auto wire = analysisFor(user);
+        auto parts = wire.value(QStringLiteral("segments")).toArray();
+        parts.append(QJsonObject{{QStringLiteral("first_unit"), QStringLiteral("u9999")},
+                                 {QStringLiteral("last_unit"), QStringLiteral("u9999")},
+                                 {QStringLiteral("speaker"), QStringLiteral("她")}});
+        wire.insert(QStringLiteral("segments"), parts);
+        return wire;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    QSignalSpy taskStatus(&controller, &Controller::taskStatus);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), 3);
+    QVERIFY(finished[0][0].toString().contains(QStringLiteral("部分提取可查看")));
+    QCOMPARE(qvariant_cast<app::TaskState>(taskStatus.last()[0]), app::TaskState::Attention);
+    const auto entries = history(fixture);
+    QCOMPARE(entries[0].run.status, storage::LLMRunStatus::Succeeded);
+    const auto mapped = entries[0].outcome.value(QStringLiteral("normalized_output")).toObject();
+    QCOMPARE(mapped.value(QStringLiteral("extraction_issues")).toArray().size(), 1);
+    int turns = 0;
+    for (const auto& value : mapped.value(QStringLiteral("segments")).toArray())
+        if (value.toObject().value(QStringLiteral("kind")).toString() == QStringLiteral("dialogue"))
+            ++turns;
+    QCOMPARE(turns, 2);
+    app::NovelAnalysisWorkbench page;
+    page.setSelectedBook(&fixture.book, 0);
+    page.showHistory(entries, fixture.book.chapters[0].id.toString());
+    QVERIFY(page.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"))
+                ->text()
+                .contains(QStringLiteral("部分提取")));
+}
 
 void ChapterAnalysisPipelineTest::confirmsIndependentDialogueFromMainWindow() {
     Fixture fixture;

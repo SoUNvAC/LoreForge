@@ -5,8 +5,8 @@
 
 namespace loreforge::app {
 // Network contracts are versioned separately from the byte-range domain schema.
-inline constexpr int chapterPromptVersion = 6;
-inline constexpr int chapterWireSchemaVersion = 4;
+inline constexpr int chapterPromptVersion = 7;
+inline constexpr int chapterWireSchemaVersion = 5;
 [[nodiscard]] QJsonObject blockReferenceSchema(const QJsonObject& byteRangeSchema);
 [[nodiscard]] QJsonObject chapterAnalysisWireSchema(const QJsonObject& byteRangeSchema);
 [[nodiscard]] QJsonObject narrativeOutput(QJsonObject normalized);

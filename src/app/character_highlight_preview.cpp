@@ -162,8 +162,8 @@ CharacterHighlightPreview::CharacterHighlightPreview(QWidget* parent, QString se
     font.setPointSize(font.pointSize() + 2);
     title->setFont(font);
     layout->addWidget(title);
-    auto* meaning = new QLabel(tr("完整正文按分割结果显示：人物颜色仅用于其对白；灰色为叙述、动作或"
-                                  "心理，琥珀色为待确认。鼠标悬停查看归属。"),
+    auto* meaning = new QLabel(tr("人物颜色用于已提取的发声，琥珀色为待确认。未提取原文保持未归属、"
+                                  "不染色，不自动认定为旁白；旧综合结果的叙述仍为灰色。"),
                                this);
     meaning->setWordWrap(true);
     layout->addWidget(meaning);
@@ -382,7 +382,7 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         const auto speaker = part.value(QStringLiteral("speaker")).toString();
         if (start != covered || stop <= start || stop > end ||
             (kind != QStringLiteral("dialogue") && kind != QStringLiteral("narration") &&
-             kind != QStringLiteral("unknown")) ||
+             kind != QStringLiteral("unknown") && kind != QStringLiteral("unassigned")) ||
             (kind != QStringLiteral("dialogue") && !speaker.isEmpty()) ||
             bytes.mid(start - base, stop - start) !=
                 part.value(QStringLiteral("text")).toString().toUtf8()) {
@@ -463,6 +463,8 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         const auto part = value.toObject();
         const auto kind = part.value(QStringLiteral("kind")).toString();
         const auto speaker = part.value(QStringLiteral("speaker")).toString();
+        if (kind == QStringLiteral("unassigned"))
+            continue;
         const auto key = kind == QStringLiteral("narration") ? narrationKey
                          : kind == QStringLiteral("dialogue") && people_.contains(speaker) &&
                                  !speaker.startsWith(QChar(0x1f))
@@ -512,7 +514,7 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         }
         previous = edge.key();
     }
-    int dialogueCount = 0, narrationCount = 0, uncertainCount = 0;
+    int dialogueCount = 0, narrationCount = 0, uncertainCount = 0, unassignedCount = 0;
     for (const auto& value : segments) {
         const auto part = value.toObject();
         const auto kind = part.value(QStringLiteral("kind")).toString();
@@ -520,6 +522,8 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
             ++dialogueCount;
         if (kind == QStringLiteral("narration"))
             ++narrationCount;
+        if (kind == QStringLiteral("unassigned"))
+            ++unassignedCount;
         if (kind == QStringLiteral("unknown") ||
             (kind == QStringLiteral("dialogue") &&
              part.value(QStringLiteral("speaker")).toString().isEmpty()))
@@ -534,6 +538,20 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
                          .arg(dialogueCount)
                          .arg(narrationCount)
                          .arg(uncertainCount));
+    if (analysis.value(QStringLiteral("extraction_mode")).toString() ==
+        QStringLiteral("sparse-utterances-v1"))
+        status_->setText(
+            status_->text() +
+            tr("\n未归属原文 %1 "
+               "段（保持原样，不代表模型判定为旁白）；只提取发声，不要求整章逐段分类。")
+                .arg(unassignedCount));
+    for (const auto& value : analysis.value(QStringLiteral("extraction_issues")).toArray()) {
+        const auto issue = value.toObject();
+        status_->setText(status_->text() +
+                         tr("\n条目 %1：%2")
+                             .arg(issue.value(QStringLiteral("entry_index")).toInt() + 1)
+                             .arg(issue.value(QStringLiteral("message")).toString()));
+    }
     if (dialogueCount == 0)
         status_->setText(status_->text() + tr("\n注意：模型没有识别出任何对白，请人工核对；叙述不分"
                                               "配给人物，0 段不等于读取失败。"));

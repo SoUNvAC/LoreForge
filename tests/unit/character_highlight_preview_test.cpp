@@ -74,7 +74,32 @@ class CharacterHighlightPreviewTest final : public QObject {
     void restoresEditableStylesAndBookBindings();
     void clearsStaleDataAndRejectsBadBoundaries();
     void paintsAndChangesOpacityAndWidth();
+    void leavesUnextractedTextUncolored();
 };
+
+void CharacterHighlightPreviewTest::leavesUnextractedTextUncolored() {
+    QTemporaryDir directory;
+    CharacterHighlightPreview panel(nullptr, directory.filePath(QStringLiteral("style.ini")));
+    auto mapped = analysis();
+    auto parts = mapped.value(QStringLiteral("segments")).toArray();
+    for (int i = 0; i < parts.size(); ++i) {
+        auto part = parts[i].toObject();
+        if (part.value(QStringLiteral("kind")).toString() == QStringLiteral("narration")) {
+            part.insert(QStringLiteral("kind"), QStringLiteral("unassigned"));
+            parts[i] = part;
+        }
+    }
+    mapped.insert(QStringLiteral("segments"), parts);
+    mapped.insert(QStringLiteral("extraction_mode"), QStringLiteral("sparse-utterances-v1"));
+    panel.showAnalysis(QStringLiteral("book-a"), source(), mapped, QStringLiteral("发声提取"));
+    const auto* text = panel.findChild<CharacterHighlightText*>();
+    QCOMPARE(text->spans().size(), 3);
+    QCOMPARE(text->toPlainText(),
+             QString(raw).replace(QStringLiteral("\r\n"), QStringLiteral("\n")));
+    const auto status = panel.findChild<QLabel*>(QStringLiteral("highlightPreviewStatus"))->text();
+    QVERIFY(status.contains(QStringLiteral("未归属原文 3 段")));
+    QVERIFY(status.contains(QStringLiteral("叙述 0 段")));
+}
 
 void CharacterHighlightPreviewTest::mapsUtf8AndDialogueBoundaries() {
     QTemporaryDir directory;
