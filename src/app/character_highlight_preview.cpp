@@ -30,6 +30,13 @@ const QStringList initialColors{QStringLiteral("#4A2718"), QStringLiteral("#5922
                                 QStringLiteral("#7A4E47"), QStringLiteral("#CDB0A1"),
                                 QStringLiteral("#B98E61"), QStringLiteral("#C7B89C"),
                                 QStringLiteral("#DDDDCF"), QStringLiteral("#DBCEC3")};
+const QString narrationKey = QChar(0x1f) + QStringLiteral("叙述 / 动作 / 心理");
+const QString unknownKey = QChar(0x1f) + QStringLiteral("待确认（类型或说话人不明）");
+QString displayName(QString key) {
+    if (key.startsWith(QChar(0x1f)))
+        key.remove(0, 1);
+    return key;
+}
 QString hashed(const QString& value) {
     return QString::fromLatin1(
         QCryptographicHash::hash(value.toUtf8(), QCryptographicHash::Sha256).toHex());
@@ -57,7 +64,7 @@ CharacterHighlightText::CharacterHighlightText(QWidget* parent) : QPlainTextEdit
     paper.setColor(QPalette::Base, QColor(Qt::white));
     paper.setColor(QPalette::Text, QColor(Qt::black));
     setPalette(paper);
-    setPlaceholderText(tr("选择章节后显示原文；分析结果可用时显示人物相关证据高亮。"));
+    setPlaceholderText(tr("选择章节后显示原文；完成新版分析后按正文分割结果染色。"));
 }
 void CharacterHighlightText::setHighlights(QList<CharacterHighlightSpan> spans,
                                            QMap<QString, QColor> colors, QString filter,
@@ -125,8 +132,8 @@ void CharacterHighlightText::mouseMoveEvent(QMouseEvent* event) {
         if (position >= span.start && position < span.end &&
             (filter_.isEmpty() || span.people.contains(filter_))) {
             QToolTip::showText(event->globalPosition().toPoint(),
-                               QStringLiteral("<qt>人物相关证据（非对白归属）：%1</qt>")
-                                   .arg(span.people.join(QStringLiteral("、")).toHtmlEscaped()),
+                               QStringLiteral("<qt>分割归属：%1</qt>")
+                                   .arg(displayName(span.people.value(0)).toHtmlEscaped()),
                                this);
             return;
         }
@@ -155,9 +162,9 @@ CharacterHighlightPreview::CharacterHighlightPreview(QWidget* parent, QString se
     font.setPointSize(font.pointSize() + 2);
     title->setFont(font);
     layout->addWidget(title);
-    auto* meaning = new QLabel(
-        tr("颜色＝人物相关证据，不等于人物说的话。多人共段用分色条带；未染色表示没有对应证据。"),
-        this);
+    auto* meaning = new QLabel(tr("完整正文按分割结果显示：人物颜色仅用于其对白；灰色为叙述、动作或"
+                                  "心理，琥珀色为待确认。鼠标悬停查看归属。"),
+                               this);
     meaning->setWordWrap(true);
     layout->addWidget(meaning);
     auto* options = new QGroupBox(tr("荧光笔设置（点击展开）"), this);
@@ -214,12 +221,12 @@ CharacterHighlightPreview::CharacterHighlightPreview(QWidget* parent, QString se
     layout->addWidget(options);
     filter_ = new QComboBox(this);
     filter_->setObjectName(QStringLiteral("highlightCharacterFilter"));
-    filter_->addItem(tr("全部人物"), QString{});
+    filter_->addItem(tr("全部分割"), QString{});
     connect(filter_, &QComboBox::currentIndexChanged, this, [this] { refreshHighlights(); });
     layout->addWidget(filter_);
     legend_ = new QTableWidget(0, 2, this);
     legend_->setObjectName(QStringLiteral("highlightCharacterLegend"));
-    legend_->setHorizontalHeaderLabels({tr("人物 / 证据数"), tr("人物颜色（可编辑）")});
+    legend_->setHorizontalHeaderLabels({tr("说话人 / 类型 · 分段数"), tr("颜色（可编辑）")});
     legend_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     legend_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     legend_->verticalHeader()->hide();
@@ -264,6 +271,10 @@ QString CharacterHighlightPreview::bindingKey(const QString& name) const {
     return QStringLiteral("bindings/") + hashed(bookId_) + QLatin1Char('/') + hashed(name);
 }
 QColor CharacterHighlightPreview::characterColor(const QString& name) const {
+    if (!overrides_.contains(name) && name == narrationKey)
+        return QColor(QStringLiteral("#B0B0B0"));
+    if (!overrides_.contains(name) && name == unknownKey)
+        return QColor(QStringLiteral("#E2A63B"));
     return overrides_.contains(name) ? overrides_.value(name) : palette_[slots_.value(name, 0)];
 }
 void CharacterHighlightPreview::saveStyle() {
@@ -293,14 +304,15 @@ void CharacterHighlightPreview::rebuildLegend() {
     const auto filter = filter_->currentData().toString();
     const QSignalBlocker blocker(filter_);
     filter_->clear();
-    filter_->addItem(tr("全部人物"), QString{});
+    filter_->addItem(tr("全部分割"), QString{});
     legend_->setRowCount(0);
     for (int row = 0; row < people_.size(); ++row) {
         const auto name = people_[row];
-        filter_->addItem(name, name);
+        filter_->addItem(displayName(name), name);
         legend_->insertRow(row);
-        legend_->setItem(row, 0,
-                         new QTableWidgetItem(tr("%1 · %2 处").arg(name).arg(counts_.value(name))));
+        legend_->setItem(
+            row, 0,
+            new QTableWidgetItem(tr("%1 · %2 段").arg(displayName(name)).arg(counts_.value(name))));
         auto* color = new QLineEdit(legend_);
         color->setObjectName(QStringLiteral("highlightPersonColor%1").arg(row));
         color->setMaximumWidth(115);
@@ -341,7 +353,7 @@ void CharacterHighlightPreview::showImportedText(QString bookId, QString text) {
     slots_.clear();
     spans_.clear();
     text_->setPlainText(std::move(text));
-    status_->setText(tr("导入文本预览；尚无人物证据染色，不代表逐句对白分割。"));
+    status_->setText(tr("尚无正文分割结果；当前仅显示未分割原文。请运行新版单章分析。"));
     rebuildLegend();
 }
 void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& source,
@@ -352,6 +364,34 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
     const auto end = source.value(QStringLiteral("end_byte")).toInteger(-1);
     if (base < 0 || end < base || end - base != bytes.size()) {
         status_->setText(tr("原文快照范围无效，未染色。"));
+        return;
+    }
+    const auto segments = analysis.value(QStringLiteral("segments")).toArray();
+    if (segments.isEmpty()) {
+        status_->setText(tr("所选任务没有正文分割结果（旧版分析或本轮尚未完成）。当前仅显示未分割原"
+                            "文；需运行新版单章分析，不会用人物证据替代。"));
+        return;
+    }
+    qint64 covered = base;
+    for (const auto& item : segments) {
+        const auto part = item.toObject();
+        const auto start = part.value(QStringLiteral("source_start")).toInteger(-1);
+        const auto stop = part.value(QStringLiteral("source_end")).toInteger(-1);
+        const auto kind = part.value(QStringLiteral("kind")).toString();
+        const auto speaker = part.value(QStringLiteral("speaker")).toString();
+        if (start != covered || stop <= start || stop > end ||
+            (kind != QStringLiteral("dialogue") && kind != QStringLiteral("narration") &&
+             kind != QStringLiteral("unknown")) ||
+            (kind != QStringLiteral("dialogue") && !speaker.isEmpty()) ||
+            bytes.mid(start - base, stop - start) !=
+                part.value(QStringLiteral("text")).toString().toUtf8()) {
+            status_->setText(tr("正文分割范围或原文校验失败，未染色。"));
+            return;
+        }
+        covered = stop;
+    }
+    if (covered != end) {
+        status_->setText(tr("正文分割不完整，未染色。"));
         return;
     }
     struct Reference {
@@ -410,14 +450,26 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         const auto custom = settings_->value(key + QStringLiteral("/color")).toString();
         if (validHex(custom))
             overrides_[name] = QColor(custom);
-        add(name, character.value(QStringLiteral("evidence")).toArray());
-        for (const auto& alias : character.value(QStringLiteral("aliases")).toArray())
-            add(name, alias.toObject().value(QStringLiteral("evidence")).toArray());
     }
-    for (const auto& value : analysis.value(QStringLiteral("events")).toArray()) {
-        const auto event = value.toObject();
-        for (const auto& name : event.value(QStringLiteral("participants")).toArray())
-            add(name.toString(), event.value(QStringLiteral("evidence")).toArray());
+    const auto characterCount = people_.size();
+    for (const auto& key : {narrationKey, unknownKey}) {
+        people_.append(key);
+        const auto custom = settings_->value(bindingKey(key) + QStringLiteral("/color")).toString();
+        if (validHex(custom))
+            overrides_[key] = QColor(custom);
+    }
+    for (const auto& value : segments) {
+        const auto part = value.toObject();
+        const auto kind = part.value(QStringLiteral("kind")).toString();
+        const auto speaker = part.value(QStringLiteral("speaker")).toString();
+        const auto key = kind == QStringLiteral("narration") ? narrationKey
+                         : kind == QStringLiteral("dialogue") && people_.contains(speaker) &&
+                                 !speaker.startsWith(QChar(0x1f))
+                             ? speaker
+                             : unknownKey;
+        add(key, QJsonArray{QJsonObject{
+                     {QStringLiteral("source_start"), part.value(QStringLiteral("source_start"))},
+                     {QStringLiteral("source_end"), part.value(QStringLiteral("source_end"))}}});
     }
     // A single UTF-8 pass maps needed boundaries to Qt's normalized UTF-16 cursor positions.
     QMap<qint64, int> positions;
@@ -459,8 +511,8 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         }
         previous = edge.key();
     }
-    status_->setText(std::move(status) + tr("\n%1 位人物 · %2 段高亮区间；原文为所选任务快照。")
-                                             .arg(people_.size())
+    status_->setText(std::move(status) + tr("\n%1 位人物 · %2 段正文分割；原文为所选任务快照。")
+                                             .arg(characterCount)
                                              .arg(spans_.size()));
     rebuildLegend();
     settings_->sync();

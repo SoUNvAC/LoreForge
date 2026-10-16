@@ -98,6 +98,12 @@ QJsonObject analysisFor(const QJsonObject& user) {
             {QStringLiteral("locations"), QJsonArray{}},
             {QStringLiteral("events"), QJsonArray{}},
             {QStringLiteral("summary"), summary},
+            {QStringLiteral("segments"),
+             QJsonArray{QJsonObject{
+                 {QStringLiteral("text"),
+                  user.value(QStringLiteral("source")).toObject().value(QStringLiteral("utf8"))},
+                 {QStringLiteral("kind"), QStringLiteral("narration")},
+                 {QStringLiteral("speaker"), QString{}}}}},
             {QStringLiteral("important_facts"), QJsonArray{summary}},
             {QStringLiteral("open_threads"), QJsonArray{}}};
 }
@@ -303,10 +309,69 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesInvalidBlockReferences_data();
     void refusesInvalidBlockReferences();
     void refusesInvalidMappingAndRendersLegacyHistory();
+    void validatesCompleteNovelSegmentation();
 
   private:
     QTemporaryDir highlightSettings_;
 };
+
+void ChapterAnalysisPipelineTest::validatesCompleteNovelSegmentation() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const auto user =
+        QJsonDocument::fromJson(fixture.preview.snapshot.content.value(QStringLiteral("messages"))
+                                    .toArray()[1]
+                                    .toObject()
+                                    .value(QStringLiteral("content"))
+                                    .toString()
+                                    .toUtf8())
+            .object();
+    const auto valid = analysisFor(user);
+    const auto check = [&](const QJsonObject& output) {
+        return app::resolveChapterEvidence(output, fixture.preview.snapshot.content, false);
+    };
+    const auto resolved = check(valid);
+    QVERIFY2(resolved.errors.isEmpty(), qPrintable(resolved.errors.join('\n')));
+    const auto segment = resolved.output.value(QStringLiteral("segments")).toArray()[0].toObject();
+    const auto source = fixture.preview.snapshot.content.value(QStringLiteral("source")).toObject();
+    QCOMPARE(segment.value(QStringLiteral("source_start")),
+             source.value(QStringLiteral("start_byte")));
+    QCOMPARE(segment.value(QStringLiteral("source_end")), source.value(QStringLiteral("end_byte")));
+    for (int mode = 0; mode < 7; ++mode) {
+        auto output = valid;
+        auto parts = output.value(QStringLiteral("segments")).toArray();
+        auto part = parts[0].toObject();
+        if (mode == 0)
+            output.remove(QStringLiteral("segments"));
+        else {
+            if (mode == 1)
+                part.insert(QStringLiteral("text"),
+                            part.value(QStringLiteral("text")).toString().chopped(1));
+            if (mode == 2)
+                part.insert(QStringLiteral("text"), QStringLiteral("改写原文"));
+            if (mode == 3)
+                part.insert(QStringLiteral("speaker"),
+                            QStringLiteral("她")); // narration cannot have a speaker
+            if (mode == 4) {
+                part.insert(QStringLiteral("kind"), QStringLiteral("dialogue"));
+                part.insert(QStringLiteral("speaker"), QStringLiteral("不在人物表中"));
+            }
+            if (mode == 5)
+                part.insert(QStringLiteral("kind"), QStringLiteral("action"));
+            parts[0] = part;
+            if (mode == 6)
+                parts.append(part); // duplicate coverage
+            output.insert(QStringLiteral("segments"), parts);
+        }
+        QVERIFY2(!check(output).errors.isEmpty(), qPrintable(QString::number(mode)));
+    }
+    // Unknown speaker is explicit, not guessed from a name occurring in narration.
+    auto output = valid;
+    auto part = output.value(QStringLiteral("segments")).toArray()[0].toObject();
+    part.insert(QStringLiteral("kind"), QStringLiteral("dialogue"));
+    output.insert(QStringLiteral("segments"), QJsonArray{part});
+    QVERIFY(check(output).errors.isEmpty());
+}
 
 void ChapterAnalysisPipelineTest::resolvesAllClaimsAndAuditsRawIds() {
     Fixture fixture;
@@ -617,9 +682,12 @@ void ChapterAnalysisPipelineTest::carriesAliasRulesAndPreservesSemanticVerdicts(
         if (role > 0) {
             QVERIFY(system.contains(QStringLiteral("逐个复核")));
             QVERIFY(system.contains(QStringLiteral("证据范围有效不代表语义正确")));
+            QVERIFY(system.contains(QStringLiteral("analysis.segments")));
+            QVERIFY(system.contains(QStringLiteral("对白边界")) ||
+                    system.contains(QStringLiteral("对白仅含实际发言")));
         }
-        QCOMPARE(entries[role].artifacts.promptVersion, 3);
-        QCOMPARE(entries[role].artifacts.outputSchemaVersion, 2);
+        QCOMPARE(entries[role].artifacts.promptVersion, app::chapterPromptVersion);
+        QCOMPARE(entries[role].artifacts.outputSchemaVersion, app::chapterWireSchemaVersion);
         QCOMPARE(entries[role].run.status, storage::LLMRunStatus::Succeeded);
     }
     QCOMPARE(

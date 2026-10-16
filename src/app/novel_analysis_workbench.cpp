@@ -36,7 +36,8 @@ QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry) {
     const auto output = entry.artifacts.parsedResponse->object();
     if (entry.artifacts.outputSchemaVersion == 1)
         return output; // Historical byte-range contracts remain read-only and renderable.
-    if (entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
+    if (entry.artifacts.outputSchemaVersion != 2 &&
+        entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
         return {};
     return resolveChapterEvidence(
                output, entry.context.content,
@@ -368,7 +369,7 @@ void NovelAnalysisWorkbench::setBusy(bool busy) {
     busy_ = busy;
     if (busy) {
         emit highlightSourceChanged(bookId_, displayedSource_, {},
-                                    tr("正在运行新任务；尚无本轮人物证据，不显示旧结果染色。"));
+                                    tr("正在运行新任务；尚无本轮正文分割，不显示旧结果染色。"));
         taskStatus_->setText(tr("单章任务运行中；可取消，不自动重试。"));
         for (auto* tree : results_) {
             tree->clear();
@@ -520,8 +521,9 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         emit highlightSourceChanged(
             analyzer->context.content.value(QStringLiteral("book_id")).toString(bookId_),
             analyzer->context.content.value(QStringLiteral("source")).toObject(), output,
-            finalPass ? tr("三角色流程通过（同模型意见）；颜色仍仅表示人物相关证据。")
-                      : tr("候选预览：后续角色未完成、存在分歧或建议重做；不是最终确认结果。"));
+            finalPass
+                ? tr("三角色流程通过（同模型意见）；显示正文分割与说话人归属，请核对模型判断。")
+                : tr("候选预览：后续角色未完成、存在分歧或建议重做；不是最终确认结果。"));
     } else {
         emit highlightSourceChanged(bookId_, displayedSource_, {},
                                     tr("所选流程没有有效的分析员结果，未染色。"));

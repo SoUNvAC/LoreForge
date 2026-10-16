@@ -117,7 +117,20 @@ ChapterPreviewBuilder::build(const core::ProjectId& projectId, const document::D
             "source_blocks 是本章原文段落表。evidence 每项只填 block_id，必须逐字选用表中编号。"
             "不得计算、猜测或返回 source_start/source_end 等字节偏移，不返回额外引用文本。"
             "系统按当前章不可变快照把编号换算为整段原文证据。重复文字也必须选择实际所在段落编号。"
-            "推断时 inferred=true，事实时 inferred=false；标注 confidence，不把猜测写成事实。") +
+            "推断时 inferred=true，事实时 inferred=false；标注 confidence，不把猜测写成事实。"
+            "另外必须输出 segments，表示分割完毕的完整小说正文，而不是证据。"
+            "每项为 text、kind、speaker。text 按 source.utf8 原顺序逐字切分，拼接必须与 "
+            "source.utf8 完全相同，"
+            "包括标题、标点、空格和换行；不得遗漏、重复、改写，不要返回字节偏移。"
+            "kind 为 "
+            "dialogue（实际说出口的话）、narration（叙述、动作、心理、标题）、unknown（类型不明）。"
+            "对白和相邻的动作、神态、说话提示语必须拆开。引用文字、内心想法不自动算对白。"
+            "speaker 仅 dialogue 可填 characters "
+            "中的标准人物名；说话人不明则空字符串，其他类型必须为空。"
+            "禁止把段落里提及的人物直接当作说话人。"
+            "例如：‘“这是什么药？”母亲的眼神变得严肃。’必须分为对白‘“这是什么药？”’和叙述‘母亲的眼"
+            "神变得严肃。’，"
+            "说话人须结合上下文判断。‘母亲阻止父亲，苏雨晴向后退。’整句是叙述，无说话人。") +
         characterAliasPolicy();
     auto prompt = inference::makePromptVersion(
         {core::PromptTemplateId::fromStableKey(QStringLiteral("markdown-chapter-analyzer")),
@@ -126,7 +139,7 @@ ChapterPreviewBuilder::build(const core::ProjectId& projectId, const document::D
     auto schema = inference::makeOutputSchema(
         core::OutputSchemaId::fromStableKey(QStringLiteral("markdown-chapter-analysis")),
         QStringLiteral("Markdown chapter analysis"), chapterWireSchemaVersion,
-        blockReferenceSchema(narrative::ChapterAnalyzer::outputSchema()), now);
+        chapterAnalysisWireSchema(narrative::ChapterAnalyzer::outputSchema()), now);
     const QJsonObject user{{QStringLiteral("chapter_id"), chapter.id.toString()},
                            {QStringLiteral("title"), chapter.title},
                            {QStringLiteral("source"), source},

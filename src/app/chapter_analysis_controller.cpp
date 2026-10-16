@@ -409,7 +409,7 @@ QString ChapterAnalysisController::loadContinuation(const QString& pipeline,
                 {source.value(QStringLiteral("source_id")).toString(),
                  source.value(QStringLiteral("start_byte")).toInteger(),
                  source.value(QStringLiteral("end_byte")).toInteger()},
-                QByteArrayView(bytes), resolved.output);
+                QByteArrayView(bytes), narrativeOutput(resolved.output));
             if (!checked.errors.isEmpty())
                 return QStringLiteral("分析员结果的证据重新校验失败；未发送。");
         } else {
@@ -477,7 +477,11 @@ void ChapterAnalysisController::nextRole() {
                 "证据范围有效不代表语义正确；不得仅因词语出现就通过。发现将自称、亲属指代或临时称谓"
                 "误作固定别名，应给 redo，并在 issues.reason "
                 "指明人物、错误别名及语义原因，附原文证据；"
-                "确实无法判断时给 human。审查时不能因复核员给 pass 就跳过这一检查。");
+                "确实无法判断时给 human。审查时不能因复核员给 pass 就跳过这一检查。"
+                "必须同时检查 analysis.segments "
+                "的正文分割：对白仅含实际发言，叙述、动作、神态和心理不得归给说话人；"
+                "根据上下文检查 speaker 是否正确，不能因提到某人物就归给他。错误时给 "
+                "redo，无法判断给 human，附所在段落证据。");
         rolePreview_.prompt = inference::makePromptVersion(
             {core::PromptTemplateId::fromStableKey(QStringLiteral("markdown-chapter-") + name),
              name},
@@ -690,7 +694,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
                         {source.value(QStringLiteral("source_id")).toString(),
                          source.value(QStringLiteral("start_byte")).toInteger(),
                          source.value(QStringLiteral("end_byte")).toInteger()},
-                        QByteArrayView(bytes), normalized);
+                        QByteArrayView(bytes), narrativeOutput(normalized));
                     for (const auto& diagnostic : checked.errors) {
                         errors.append(diagnostic.path + QStringLiteral(": ") + diagnostic.message);
                     }

@@ -49,6 +49,37 @@ QJsonObject blockReferenceSchema(const QJsonObject& schema) {
     return transformSchema(schema).toObject();
 }
 
+QJsonObject chapterAnalysisWireSchema(const QJsonObject& schema) {
+    auto result = blockReferenceSchema(schema);
+    auto properties = result.value(QStringLiteral("properties")).toObject();
+    const QJsonObject stringType{{QStringLiteral("type"), QStringLiteral("string")}};
+    const QJsonObject kindType{
+        {QStringLiteral("type"), QStringLiteral("string")},
+        {QStringLiteral("enum"), QJsonArray{QStringLiteral("dialogue"), QStringLiteral("narration"),
+                                            QStringLiteral("unknown")}}};
+    const QJsonObject part{
+        {QStringLiteral("type"), QStringLiteral("object")},
+        {QStringLiteral("additionalProperties"), false},
+        {QStringLiteral("required"),
+         QJsonArray{QStringLiteral("text"), QStringLiteral("kind"), QStringLiteral("speaker")}},
+        {QStringLiteral("properties"), QJsonObject{{QStringLiteral("text"), stringType},
+                                                   {QStringLiteral("speaker"), stringType},
+                                                   {QStringLiteral("kind"), kindType}}}};
+    properties.insert(QStringLiteral("segments"),
+                      QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
+                                  {QStringLiteral("items"), part}});
+    result.insert(QStringLiteral("properties"), properties);
+    auto required = result.value(QStringLiteral("required")).toArray();
+    required.append(QStringLiteral("segments"));
+    result.insert(QStringLiteral("required"), required);
+    return result;
+}
+
+QJsonObject narrativeOutput(QJsonObject normalized) {
+    normalized.remove(QStringLiteral("segments"));
+    return normalized;
+}
+
 ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
                                                const QJsonObject& snapshot, bool review) {
     ResolvedChapterEvidence result;
@@ -159,6 +190,44 @@ ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
         normalized.insert(QStringLiteral("issues"), issues);
     } else
         normalized = walk(walk, output, QStringLiteral("$")).toObject();
+    if (!review && snapshot.value(QStringLiteral("schema_version")).toInt() >= 3) {
+        const auto segments = output.value(QStringLiteral("segments"));
+        QSet<QString> names;
+        for (const auto& character : output.value(QStringLiteral("characters")).toArray())
+            names.insert(character.toObject().value(QStringLiteral("name")).toString());
+        QJsonArray resolved;
+        qint64 offset = 0;
+        if (!segments.isArray() || segments.toArray().isEmpty())
+            result.errors.append(QStringLiteral("$.segments: 缺少完整正文分割结果。"));
+        for (const auto& item : segments.toArray()) {
+            auto segment = item.toObject();
+            const auto text = segment.value(QStringLiteral("text")).toString().toUtf8();
+            const auto kind = segment.value(QStringLiteral("kind")).toString();
+            const auto speaker = segment.value(QStringLiteral("speaker")).toString();
+            if (segment.size() != 3 || !segment.value(QStringLiteral("text")).isString() ||
+                !segment.value(QStringLiteral("speaker")).isString() || text.isEmpty() ||
+                (kind != QStringLiteral("dialogue") && kind != QStringLiteral("narration") &&
+                 kind != QStringLiteral("unknown")) ||
+                (kind != QStringLiteral("dialogue") && !speaker.isEmpty()) ||
+                (!speaker.isEmpty() && !names.contains(speaker)) || offset > bytes.size() ||
+                text.size() > bytes.size() - offset || bytes.mid(offset, text.size()) != text) {
+                result.errors.append(
+                    QStringLiteral(
+                        "$.segments[%1]: "
+                        "分割必须按顺序逐字覆盖原文；类型或说话人无效。不可把叙述归给人物。")
+                        .arg(resolved.size()));
+                break;
+            }
+            segment.insert(QStringLiteral("source_start"), base + offset);
+            offset += text.size();
+            segment.insert(QStringLiteral("source_end"), base + offset);
+            resolved.append(segment);
+        }
+        if (offset != bytes.size())
+            result.errors.append(QStringLiteral(
+                "$.segments: 分割未完整覆盖原文（包括标点、标题和换行），未接受结果。"));
+        normalized.insert(QStringLiteral("segments"), resolved);
+    }
     if (result.errors.isEmpty())
         result.output = normalized;
     return result;

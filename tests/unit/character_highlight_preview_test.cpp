@@ -13,7 +13,9 @@
 
 using namespace loreforge::app;
 namespace {
-const QString raw = QStringLiteral("# 家中😀\r\n\r\n母亲阻止父亲。\r\n\r\n苏雨晴退到门边。\r\n");
+const QString raw = QStringLiteral("# "
+                                   "家中😀\r\n\r\n“这是什么药？”母亲的眼神变得严肃。\r\n“别动。”父"
+                                   "亲说。\r\n苏雨晴退到门边。\r\n“谁在外面？”");
 QJsonObject source() {
     return {{QStringLiteral("utf8"), raw},
             {QStringLiteral("start_byte"), 3},
@@ -25,17 +27,35 @@ QJsonArray evidence(const QString& quote) {
                         {QStringLiteral("source_end"), 3 + start + quote.toUtf8().size()}}};
 }
 QJsonObject analysis(bool reverse = false) {
-    const QJsonObject mother{
-        {QStringLiteral("name"), QStringLiteral("母亲")},
-        {QStringLiteral("evidence"), evidence(QStringLiteral("母亲阻止父亲。"))}};
-    const QJsonObject father{
-        {QStringLiteral("name"), QStringLiteral("父亲")},
-        {QStringLiteral("evidence"), evidence(QStringLiteral("母亲阻止父亲。"))}};
+    const QJsonObject mother{{QStringLiteral("name"), QStringLiteral("母亲")},
+                             {QStringLiteral("evidence"),
+                              evidence(QStringLiteral("“这是什么药？”母亲的眼神变得严肃。"))}};
+    const QJsonObject father{{QStringLiteral("name"), QStringLiteral("父亲")},
+                             {QStringLiteral("evidence"),
+                              evidence(QStringLiteral("“这是什么药？”母亲的眼神变得严肃。"))}};
     const QJsonObject girl{
         {QStringLiteral("name"), QStringLiteral("苏雨晴")},
         {QStringLiteral("evidence"), evidence(QStringLiteral("苏雨晴退到门边。"))}};
+    QJsonArray segments;
+    qint64 offset = 3;
+    const auto add = [&](QString text, QString kind, QString speaker = {}) {
+        const auto start = offset;
+        offset += text.toUtf8().size();
+        segments.append(QJsonObject{{QStringLiteral("text"), text},
+                                    {QStringLiteral("kind"), kind},
+                                    {QStringLiteral("speaker"), speaker},
+                                    {QStringLiteral("source_start"), start},
+                                    {QStringLiteral("source_end"), offset}});
+    };
+    add(QStringLiteral("# 家中😀\r\n\r\n"), QStringLiteral("narration"));
+    add(QStringLiteral("“这是什么药？”"), QStringLiteral("dialogue"), QStringLiteral("母亲"));
+    add(QStringLiteral("母亲的眼神变得严肃。\r\n"), QStringLiteral("narration"));
+    add(QStringLiteral("“别动。”"), QStringLiteral("dialogue"), QStringLiteral("父亲"));
+    add(QStringLiteral("父亲说。\r\n苏雨晴退到门边。\r\n"), QStringLiteral("narration"));
+    add(QStringLiteral("“谁在外面？”"), QStringLiteral("dialogue"));
     return {{QStringLiteral("characters"),
              reverse ? QJsonArray{girl, father, mother} : QJsonArray{mother, father, girl}},
+            {QStringLiteral("segments"), segments},
             {QStringLiteral("events"), QJsonArray{}}};
 }
 } // namespace
@@ -50,25 +70,27 @@ class CharacterHighlightPreviewTest final : public QObject {
         if (!families.isEmpty())
             QApplication::setFont(QFont(families.first(), 11));
     }
-    void mapsUtf8AndOverlappingEvidence();
+    void mapsUtf8AndDialogueBoundaries();
     void restoresEditableStylesAndBookBindings();
     void clearsStaleDataAndRejectsBadBoundaries();
     void paintsAndChangesOpacityAndWidth();
 };
 
-void CharacterHighlightPreviewTest::mapsUtf8AndOverlappingEvidence() {
+void CharacterHighlightPreviewTest::mapsUtf8AndDialogueBoundaries() {
     QTemporaryDir directory;
     CharacterHighlightPreview panel(nullptr, directory.filePath(QStringLiteral("style.ini")));
     panel.showAnalysis(QStringLiteral("book-a"), source(), analysis(), QStringLiteral("候选结果"));
     auto* text = panel.findChild<CharacterHighlightText*>();
-    QCOMPARE(text->spans().size(), 2);
+    QCOMPARE(text->spans().size(), 6);
     const auto plain = text->toPlainText();
-    QCOMPARE(text->spans()[0].start, plain.indexOf(QStringLiteral("母亲阻止父亲。")));
-    QCOMPARE(text->spans()[0].end - text->spans()[0].start,
-             QStringLiteral("母亲阻止父亲。").size());
-    QCOMPARE(text->spans()[0].people.size(), 2);
-    QVERIFY(text->spans()[0].people.contains(QStringLiteral("母亲")));
-    QVERIFY(text->spans()[0].people.contains(QStringLiteral("父亲")));
+    QCOMPARE(text->spans()[1].start, plain.indexOf(QStringLiteral("“这是什么药？”")));
+    QCOMPARE(text->spans()[1].end - text->spans()[1].start,
+             QStringLiteral("“这是什么药？”").size());
+    QCOMPARE(text->spans()[1].people, QStringList{QStringLiteral("母亲")});
+    QVERIFY(!text->spans()[2].people.contains(QStringLiteral("母亲")));
+    QVERIFY(text->spans()[2].people[0].contains(QStringLiteral("叙述")));
+    QVERIFY(text->spans().last().people[0].contains(QStringLiteral("待确认")));
+    QCOMPARE(text->spans().last().end, plain.size());
     QCOMPARE(panel.characterColor(QStringLiteral("母亲")).name().toUpper(),
              QStringLiteral("#4A2718"));
     QCOMPARE(panel.characterColor(QStringLiteral("父亲")).name().toUpper(),
@@ -78,7 +100,7 @@ void CharacterHighlightPreviewTest::mapsUtf8AndOverlappingEvidence() {
                 ->text()
                 .contains(QStringLiteral("候选")));
     auto* filter = panel.findChild<QComboBox*>(QStringLiteral("highlightCharacterFilter"));
-    QCOMPARE(filter->count(), 4);
+    QCOMPARE(filter->count(), 6);
     filter->setCurrentIndex(1);
     QCOMPARE(filter->currentData().toString(), QStringLiteral("母亲"));
 }
@@ -128,18 +150,21 @@ void CharacterHighlightPreviewTest::clearsStaleDataAndRejectsBadBoundaries() {
     QVERIFY(text->spans().isEmpty());
     QCOMPARE(text->toPlainText(), QStringLiteral("下一章"));
     auto output = analysis();
-    auto people = output.value(QStringLiteral("characters")).toArray();
-    auto mother = people[0].toObject();
-    auto refs = mother.value(QStringLiteral("evidence")).toArray();
-    auto ref = refs[0].toObject();
-    ref.insert(QStringLiteral("source_start"),
-               ref.value(QStringLiteral("source_start")).toInteger() + 1);
-    refs[0] = ref;
-    mother.insert(QStringLiteral("evidence"), refs);
-    people = {mother};
-    output.insert(QStringLiteral("characters"), people);
+    auto segments = output.value(QStringLiteral("segments")).toArray();
+    auto part = segments[1].toObject();
+    part.insert(QStringLiteral("source_start"),
+                part.value(QStringLiteral("source_start")).toInteger() + 1);
+    segments[1] = part;
+    output.insert(QStringLiteral("segments"), segments);
     panel.showAnalysis(QStringLiteral("book-a"), source(), output, QStringLiteral("候选"));
     QVERIFY(text->spans().isEmpty());
+    output = analysis();
+    output.remove(QStringLiteral("segments"));
+    panel.showAnalysis(QStringLiteral("book-a"), source(), output, QStringLiteral("旧历史"));
+    QVERIFY(text->spans().isEmpty());
+    QVERIFY(panel.findChild<QLabel*>(QStringLiteral("highlightPreviewStatus"))
+                ->text()
+                .contains(QStringLiteral("旧版")));
 }
 
 void CharacterHighlightPreviewTest::paintsAndChangesOpacityAndWidth() {
@@ -147,7 +172,7 @@ void CharacterHighlightPreviewTest::paintsAndChangesOpacityAndWidth() {
     CharacterHighlightPreview panel(nullptr, directory.filePath(QStringLiteral("style.ini")));
     panel.resize(600, 800);
     panel.showAnalysis(QStringLiteral("book-a"), source(), analysis(),
-                       QStringLiteral("候选：仅显示人物相关证据"));
+                       QStringLiteral("候选：正文分割与说话人归属"));
     panel.show();
     QTest::qWait(30);
     auto* text = panel.findChild<CharacterHighlightText*>();
