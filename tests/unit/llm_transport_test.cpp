@@ -231,7 +231,113 @@ class LLMTransportTest final : public QObject {
     void redactsCredentialsAcrossStreamDeltas();
     void acceptsMultilineDataAndCarriageReturns();
     void retainsReportedUsageWhenStreamingIsCancelled();
+    void acceptsEmptyCompatibilityFields_data();
+    void acceptsEmptyCompatibilityFields();
+    void identifiesTheRejectedStreamEventWithoutStoringIt();
 };
+
+void LLMTransportTest::acceptsEmptyCompatibilityFields_data() {
+    QTest::addColumn<int>("mode");
+    QTest::newRow("null-tool-placeholders") << 0;
+    QTest::newRow("empty-tool-placeholders") << 1;
+    QTest::newRow("single-choice-without-index") << 2;
+    QTest::newRow("null-terminal-delta") << 3;
+    QTest::newRow("missing-terminal-delta") << 4;
+    QTest::newRow("null-usage-control-event") << 5;
+    QTest::newRow("empty-choice-control-event") << 6;
+    QTest::newRow("empty-finish-is-not-finished") << 7;
+    QTest::newRow("combined-relay-placeholders") << 8;
+}
+
+void LLMTransportTest::acceptsEmptyCompatibilityFields() {
+    QFETCH(int, mode);
+    auto first =
+        QJsonDocument::fromJson(
+            streamEvent({{u"reasoning_content"_s, u"hidden-reasoning"_s}}).sliced(6).trimmed())
+            .object();
+    auto choices = first.value(u"choices"_s).toArray();
+    auto choice = choices[0].toObject();
+    auto delta = choice.value(u"delta"_s).toObject();
+    if (mode == 0 || mode == 8) {
+        delta.insert(u"tool_calls"_s, QJsonValue());
+        delta.insert(u"function_call"_s, QJsonValue());
+        first.insert(u"error"_s, QJsonValue());
+    }
+    if (mode == 1) {
+        delta.insert(u"tool_calls"_s, QJsonArray{});
+        delta.insert(u"function_call"_s, QJsonObject{});
+    }
+    if (mode == 2 || mode == 8)
+        choice.remove(u"index"_s);
+    if (mode == 7 || mode == 8)
+        choice.insert(u"finish_reason"_s, QString());
+    choice.insert(u"delta"_s, delta);
+    choices[0] = choice;
+    first.insert(u"choices"_s, choices);
+    HttpResponse response;
+    response.contentType = "text/event-stream";
+    response.body = "data: " + QJsonDocument(first).toJson(QJsonDocument::Compact) + "\n\n";
+    if (mode == 5 || mode == 8)
+        response.body += "data: {\"choices\":[],\"usage\":null}\n\n";
+    if (mode == 6)
+        response.body += "data: {\"choices\":[]}\n\n";
+    response.body += streamEvent({{u"content"_s, u"{\"ok\":true}"_s}});
+    if (mode == 3 || mode == 8)
+        response.body +=
+            "data: {\"choices\":[{\"index\":0,\"delta\":null,\"finish_reason\":\"stop\"}]}\n\n";
+    else if (mode == 4)
+        response.body += "data: {\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\n\n";
+    else
+        response.body += streamEvent({}, u"stop"_s);
+    response.body += streamUsage() + "data: [DONE]\n\n";
+    ScriptedHttpServer server;
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    input.responseFormat = {{u"type"_s, u"json_object"_s}};
+    std::optional<loreforge::llm::LLMResult> result;
+    QSignalSpy progress(&client, &loreforge::llm::QwenClient::streamProgress);
+    static_cast<void>(
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); }));
+    QTRY_VERIFY(result.has_value());
+    QVERIFY(std::holds_alternative<loreforge::llm::LLMResponse>(*result));
+    const auto output = std::get<loreforge::llm::LLMResponse>(*result);
+    QVERIFY(output.streamed);
+    QVERIFY(output.structuredContent.toObject().value(u"ok"_s).toBool());
+    QCOMPARE(output.usage.totalTokens, 7);
+    QVERIFY(!output.rawResponse.contains("hidden-reasoning"));
+    for (const auto& event : progress)
+        QVERIFY(!event[1].toString().contains(u"hidden-reasoning"_s));
+    QCOMPARE(server.requestCount(), 1);
+}
+
+void LLMTransportTest::identifiesTheRejectedStreamEventWithoutStoringIt() {
+    ScriptedHttpServer server;
+    HttpResponse response;
+    response.contentType = "text/event-stream";
+    response.body =
+        streamEvent({{u"reasoning_content"_s, QString(757, QLatin1Char('r'))}}) +
+        streamEvent({{u"function_call"_s, QJsonObject{{u"name"_s, u"fixture-secret"_s}}}});
+    server.enqueue(response);
+    auto client = makeClient(server);
+    auto input = request();
+    input.stream = true;
+    std::optional<loreforge::llm::LLMResult> result;
+    static_cast<void>(
+        client.enqueue(input, [&](const QUuid&, auto value) { result = std::move(value); }));
+    QTRY_VERIFY(result.has_value());
+    const auto error = std::get<loreforge::llm::LLMError>(*result);
+    QCOMPARE(error.diagnostics.reasoningBytes, 757);
+    QCOMPARE(error.diagnostics.contentBytes, 0);
+    const auto diagnostics = loreforge::llm::responseDiagnosticsJson(error.diagnostics);
+    QCOMPARE(diagnostics.value(u"response_transport"_s).toString(), u"sse"_s);
+    QCOMPARE(diagnostics.value(u"stream_problem"_s).toString(), u"function_call"_s);
+    QCOMPARE(diagnostics.value(u"stream_event_index"_s).toInteger(), 2);
+    QVERIFY(diagnostics.value(u"stream_event_bytes"_s).toInteger() > 0);
+    QVERIFY(error.rawResponse.isEmpty());
+    QVERIFY(!QJsonDocument(diagnostics).toJson().contains("fixture-secret"));
+}
 
 void LLMTransportTest::acceptsMultilineDataAndCarriageReturns() {
     ScriptedHttpServer server;
@@ -350,8 +456,23 @@ void LLMTransportTest::rejectsIncompleteAndMalformedStreams_data() {
                                  << int(ResponseIssue::StreamProtocol);
     QTest::newRow("bad-content") << streamEvent({{u"content"_s, QJsonArray{}}})
                                  << int(ResponseIssue::StreamProtocol);
-    QTest::newRow("tool-call") << streamEvent({{u"tool_calls"_s, QJsonArray{}}})
+    QTest::newRow("tool-call")
+        << streamEvent({{u"tool_calls"_s, QJsonArray{QJsonObject{{u"id"_s, u"fixture-secret"_s}}}}})
+        << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("wrong-tool-type")
+        << streamEvent({{u"tool_calls"_s, QString()}}) << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("bad-delta") << QByteArray(
+                                      "data: {\"choices\":[{\"index\":0,\"delta\":null}]}\n\n")
                                << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("nonzero-index")
+        << QByteArray("data: {\"choices\":[{\"index\":1,\"delta\":{}}]}\n\n")
+        << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("fractional-index")
+        << QByteArray("data: {\"choices\":[{\"index\":0.5,\"delta\":{}}]}\n\n")
+        << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("bad-finish") << streamEvent({}, 3) << int(ResponseIssue::StreamProtocol);
+    QTest::newRow("duplicate-finish") << streamEvent({}, u"stop"_s) + streamEvent({}, u"stop"_s)
+                                      << int(ResponseIssue::StreamProtocol);
     QTest::newRow("event-too-large") << QByteArray("data: ") + QByteArray(1024 * 1024 + 1, 'x')
                                      << int(ResponseIssue::ResponseLimit);
     QTest::newRow("after-done") << valid + "data: [DONE]\n\ndata: {}\n\n"
@@ -389,6 +510,11 @@ void LLMTransportTest::rejectsIncompleteAndMalformedStreams() {
     QVERIFY(std::holds_alternative<loreforge::llm::LLMError>(*result));
     const auto error = std::get<loreforge::llm::LLMError>(*result);
     QCOMPARE(int(error.diagnostics.issue), issue);
+    QVERIFY(error.diagnostics.streamed);
+    if (issue == int(loreforge::llm::ResponseIssue::StreamProtocol)) {
+        QVERIFY(error.diagnostics.streamProblem != loreforge::llm::StreamProblem::None);
+        QVERIFY(error.diagnostics.streamEventIndex > 0);
+    }
     QVERIFY(!loreforge::llm::responseDiagnosticSummary(error.diagnostics)
                  .contains(u"private-thought"_s));
     QCOMPARE(server.requestCount(), 1);

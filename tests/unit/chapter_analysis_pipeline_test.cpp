@@ -880,6 +880,12 @@ void ChapterAnalysisPipelineTest::refusesInvalidEvidenceAndTruncation() {
     const auto entries = history(fixture);
     QCOMPARE(entries.size(), 1);
     QCOMPARE(entries[0].run.status, storage::LLMRunStatus::Failed);
+    if (mode == 3) {
+        QCOMPARE(entries[0].outcome.value(QStringLiteral("response_transport")).toString(),
+                 QStringLiteral("sse"));
+        QCOMPARE(entries[0].outcome.value(QStringLiteral("response_record_format")).toString(),
+                 QStringLiteral("none"));
+    }
     QVERIFY(!entries[0].outcome.value(QStringLiteral("domain_errors")).toArray().isEmpty());
 }
 

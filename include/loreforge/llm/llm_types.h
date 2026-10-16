@@ -98,6 +98,27 @@ enum class ResponseIssue {
     ResponseLimit
 };
 
+enum class StreamProblem {
+    None,
+    EventAfterDone,
+    EventJson,
+    EventType,
+    ProviderError,
+    ChoicesType,
+    MultipleChoices,
+    ChoiceType,
+    ChoiceIndex,
+    DeltaType,
+    ContentType,
+    ReasoningType,
+    ContentAfterFinish,
+    ToolCalls,
+    FunctionCall,
+    FinishType,
+    DuplicateFinish,
+    UsageType
+};
+
 struct ResponseDiagnostics final {
     ResponseIssue issue = ResponseIssue::None;
     QString finishReason;
@@ -108,6 +129,10 @@ struct ResponseDiagnostics final {
     TokenUsage usage;
     bool usageReported = false;
     bool usageInvalid = false;
+    bool streamed = false;
+    StreamProblem streamProblem = StreamProblem::None;
+    qint64 streamEventIndex = 0;
+    qint64 streamEventBytes = 0;
     friend bool operator==(const ResponseDiagnostics&, const ResponseDiagnostics&) = default;
 };
 

@@ -147,3 +147,14 @@ HTTP POST 仍一次发送完整 JSON 请求；响应改为 `text/event-stream`�
 成功审计保存精确请求及由 SSE 拼合的标准响应 JSON，不把重建 JSON 冒充原始 SSE 帧；
 思考文本不进入重建响应。失败只保存安全诊断，合法尾包 usage 按一次请求计数，缺失则未知。
 数据库版本不变，既有非流式历史仍可查看；满足原续跑条件的同版本角色结果仍可复用。
+
+兼容层允许无调用含义的空占位：`tool_calls: null/[]`、`function_call: null/{}`、
+`error: null`、空 choices 的控制/usage 事件、单候选省略 index，以及带明确非空
+finish_reason 的空/缺失 delta。空 finish_reason 仅表示未结束，仍必须等到明确结束和 `[DONE]`。
+非空工具调用、错误载荷、非零/异常 index、多候选、正文类型错误和重复结束仍拒绝。
+这些规则不证明某个真实中转站采用了其中哪种格式，需要根据实际失败诊断判断。
+
+SSE 失败诊断新增固定枚举 `stream_problem`、事件序号 `stream_event_index` 与事件字节长度
+`stream_event_bytes`，不保存事件原文、任意服务端字段名或思考正文。事件 JSON 解析失败时，
+json_error_offset 指向当前 data 事件内部。已确认收到 SSE 的失败回执标记 response_transport=sse；
+未保存正常响应时 response_record_format=none，不再把已识别 SSE 的协议失败写成未知传输。

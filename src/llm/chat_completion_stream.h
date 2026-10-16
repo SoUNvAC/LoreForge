@@ -75,6 +75,10 @@ class ChatCompletionStream final {
     quint64 activity = 0;
     quint64 generation = 0;
     bool done = false;
+    StreamProblem problem = StreamProblem::None;
+    qint64 eventIndex = 0;
+    qint64 eventBytes = 0;
+    qint64 jsonErrorOffset = -1;
 
   private:
     void consumeLine(QByteArray line) {
@@ -110,9 +114,16 @@ class ChatCompletionStream final {
             issue = ResponseIssue::ResponseLimit;
     }
 
+    void reject(StreamProblem value) {
+        problem = value;
+        issue = ResponseIssue::StreamProtocol;
+    }
+
     void dispatch() {
+        ++eventIndex;
+        eventBytes = data_.size();
         if (done) {
-            issue = ResponseIssue::StreamProtocol;
+            reject(StreamProblem::EventAfterDone);
             return;
         }
         if (data_.trimmed() == "[DONE]") {
@@ -122,20 +133,33 @@ class ChatCompletionStream final {
         }
         QJsonParseError error;
         const auto document = QJsonDocument::fromJson(data_, &error);
-        if (error.error != QJsonParseError::NoError || !document.isObject()) {
-            issue = ResponseIssue::StreamProtocol;
+        if (error.error != QJsonParseError::NoError) {
+            jsonErrorOffset = error.offset;
+            reject(StreamProblem::EventJson);
+            return;
+        }
+        if (!document.isObject()) {
+            reject(StreamProblem::EventType);
             return;
         }
         const auto chunk = document.object();
-        if (chunk.contains(QStringLiteral("error")) ||
-            !chunk.value(QStringLiteral("choices")).isArray()) {
-            issue = ResponseIssue::StreamProtocol;
+        const auto providerError = chunk.value(QStringLiteral("error"));
+        if (!providerError.isUndefined() && !providerError.isNull()) {
+            reject(StreamProblem::ProviderError);
+            return;
+        }
+        if (!chunk.value(QStringLiteral("choices")).isArray()) {
+            reject(StreamProblem::ChoicesType);
             return;
         }
         const auto choices = chunk.value(QStringLiteral("choices")).toArray();
-        if (choices.size() > 1 ||
-            (choices.isEmpty() && !chunk.value(QStringLiteral("usage")).isObject())) {
-            issue = ResponseIssue::StreamProtocol;
+        if (choices.size() > 1) {
+            reject(StreamProblem::MultipleChoices);
+            return;
+        }
+        const auto reportedUsage = chunk.value(QStringLiteral("usage"));
+        if (!reportedUsage.isUndefined() && !reportedUsage.isNull() && !reportedUsage.isObject()) {
+            reject(StreamProblem::UsageType);
             return;
         }
         if (chunk.value(QStringLiteral("id")).isString())
@@ -147,23 +171,42 @@ class ChatCompletionStream final {
             usage = chunk.value(QStringLiteral("usage"));
         if (!choices.isEmpty()) {
             const auto choice = choices[0].toObject();
-            if (!choices[0].isObject() || choice.value(QStringLiteral("index")).toInt(-1) != 0 ||
-                !choice.value(QStringLiteral("delta")).isObject()) {
-                issue = ResponseIssue::StreamProtocol;
+            if (!choices[0].isObject()) {
+                reject(StreamProblem::ChoiceType);
                 return;
             }
-            const auto delta = choice.value(QStringLiteral("delta")).toObject();
+            // With exactly one choice, an omitted index is unambiguous. Explicit wrong
+            // indices/types are still rejected; never merge multiple candidates.
+            const auto index = choice.value(QStringLiteral("index"));
+            if (!index.isUndefined() && (!index.isDouble() || index.toDouble() != 0)) {
+                reject(StreamProblem::ChoiceIndex);
+                return;
+            }
+            const auto finish = choice.value(QStringLiteral("finish_reason"));
+            const auto deltaValue = choice.value(QStringLiteral("delta"));
+            const auto emptyTerminal = (deltaValue.isUndefined() || deltaValue.isNull()) &&
+                                       finish.isString() && !finish.toString().isEmpty() &&
+                                       !choice.contains(QStringLiteral("message")) &&
+                                       !choice.contains(QStringLiteral("text")) &&
+                                       !choice.contains(QStringLiteral("tool_calls")) &&
+                                       !choice.contains(QStringLiteral("function_call"));
+            if (!deltaValue.isObject() && !emptyTerminal) {
+                reject(StreamProblem::DeltaType);
+                return;
+            }
+            const auto delta = deltaValue.toObject();
             for (const auto& field :
                  {QStringLiteral("content"), QStringLiteral("reasoning_content")}) {
                 const auto value = delta.value(field);
                 if (!value.isUndefined() && !value.isNull() && !value.isString()) {
-                    issue = ResponseIssue::StreamProtocol;
+                    reject(field == QStringLiteral("content") ? StreamProblem::ContentType
+                                                              : StreamProblem::ReasoningType);
                     return;
                 }
                 const auto text = value.toString();
                 if (!text.isEmpty()) {
                     if (!finishReason.isEmpty()) {
-                        issue = ResponseIssue::StreamProtocol;
+                        reject(StreamProblem::ContentAfterFinish);
                         return;
                     }
                     ++generation;
@@ -174,15 +217,28 @@ class ChatCompletionStream final {
                         reasoningBytes += text.toUtf8().size();
                 }
             }
-            if (delta.contains(QStringLiteral("tool_calls")) ||
-                delta.contains(QStringLiteral("function_call"))) {
-                issue = ResponseIssue::StreamProtocol;
+            // Compatibility serializers often emit null/empty placeholders. These are
+            // not tool invocations. Any actual tool/function payload remains unsupported.
+            const auto tools = delta.value(QStringLiteral("tool_calls"));
+            if (!tools.isUndefined() && !tools.isNull() &&
+                !(tools.isArray() && tools.toArray().isEmpty())) {
+                reject(StreamProblem::ToolCalls);
                 return;
             }
-            const auto finish = choice.value(QStringLiteral("finish_reason"));
-            if (!finish.isUndefined() && !finish.isNull()) {
-                if (!finish.isString() || finish.toString().isEmpty() || !finishReason.isEmpty()) {
-                    issue = ResponseIssue::StreamProtocol;
+            const auto function = delta.value(QStringLiteral("function_call"));
+            if (!function.isUndefined() && !function.isNull() &&
+                !(function.isObject() && function.toObject().isEmpty())) {
+                reject(StreamProblem::FunctionCall);
+                return;
+            }
+            if (!finish.isUndefined() && !finish.isNull() &&
+                !(finish.isString() && finish.toString().isEmpty())) {
+                if (!finish.isString() || finish.toString().isEmpty()) {
+                    reject(StreamProblem::FinishType);
+                    return;
+                }
+                if (!finishReason.isEmpty()) {
+                    reject(StreamProblem::DuplicateFinish);
                     return;
                 }
                 finishReason = finish.toString();

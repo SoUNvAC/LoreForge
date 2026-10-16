@@ -608,6 +608,8 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     QJsonObject responseDiagnostics;
     auto schemaReport = inference::ValidationReport{inference::ValidationStatus::Unavailable, {}};
     if (const auto* error = std::get_if<llm::LLMError>(&result)) {
+        if (error->diagnostics.streamed)
+            responseTransport = QStringLiteral("sse");
         run_.attemptCount = error->attemptCount;
         run_.latencyMs = error->latencyMs;
         run_.errorCode = llm::errorCodeName(error->code);
@@ -705,7 +707,8 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         {QStringLiteral("usage_known"), usageKnown},
         {QStringLiteral("response_transport"), responseTransport},
         {QStringLiteral("response_record_format"),
-         responseTransport == QStringLiteral("sse")
+         !raw.has_value() ? QStringLiteral("none")
+         : responseTransport == QStringLiteral("sse")
              ? QStringLiteral("assembled-chat-completion-json")
              : QStringLiteral("provider-json-or-none")},
         {QStringLiteral("response_diagnostics"), responseDiagnostics},

@@ -68,6 +68,28 @@ bool isRetryableHttpStatus(int status) {
     return status == 408 || status == 425 || status == 429 || status >= 500;
 }
 
+QString streamProblemName(StreamProblem problem) {
+    const QStringList names{QStringLiteral("none"),
+                            QStringLiteral("event_after_done"),
+                            QStringLiteral("event_json"),
+                            QStringLiteral("event_type"),
+                            QStringLiteral("provider_error"),
+                            QStringLiteral("choices_type"),
+                            QStringLiteral("multiple_choices"),
+                            QStringLiteral("choice_type"),
+                            QStringLiteral("choice_index"),
+                            QStringLiteral("delta_type"),
+                            QStringLiteral("content_type"),
+                            QStringLiteral("reasoning_type"),
+                            QStringLiteral("content_after_finish"),
+                            QStringLiteral("tool_calls"),
+                            QStringLiteral("function_call"),
+                            QStringLiteral("finish_type"),
+                            QStringLiteral("duplicate_finish"),
+                            QStringLiteral("usage_type")};
+    return names.at(static_cast<int>(problem));
+}
+
 std::optional<TokenUsage> tokenUsage(const QJsonValue& value) {
     if (value.isUndefined() || value.isNull()) {
         return TokenUsage{};
@@ -129,6 +151,13 @@ QJsonObject responseDiagnosticsJson(const ResponseDiagnostics& value) {
                         {QStringLiteral("completion_tokens"), value.usage.completionTokens},
                         {QStringLiteral("total_tokens"), value.usage.totalTokens}});
     }
+    if (value.streamed) {
+        result.insert(QStringLiteral("response_transport"), QStringLiteral("sse"));
+        result.insert(QStringLiteral("stream_event_index"), value.streamEventIndex);
+        result.insert(QStringLiteral("stream_event_bytes"), value.streamEventBytes);
+        if (value.streamProblem != StreamProblem::None)
+            result.insert(QStringLiteral("stream_problem"), streamProblemName(value.streamProblem));
+    }
     return result;
 }
 
@@ -187,6 +216,11 @@ QString responseDiagnosticSummary(const ResponseDiagnostics& value) {
     }
     if (value.jsonErrorOffset >= 0)
         reason += QStringLiteral("；JSON 错误偏移 %1").arg(value.jsonErrorOffset);
+    if (value.streamProblem != StreamProblem::None)
+        reason += QStringLiteral("；事件 #%1（%2 字节）；具体原因 %3")
+                      .arg(value.streamEventIndex)
+                      .arg(value.streamEventBytes)
+                      .arg(streamProblemName(value.streamProblem));
     return reason;
 }
 
@@ -410,6 +444,11 @@ void QwenClient::reportStreamProgress(bool generating) {
 ResponseDiagnostics QwenClient::streamDiagnostics(ResponseIssue issue) const {
     ResponseDiagnostics diagnostics;
     diagnostics.issue = issue;
+    diagnostics.streamed = receivedSse_;
+    diagnostics.streamProblem = stream_->problem;
+    diagnostics.streamEventIndex = stream_->eventIndex;
+    diagnostics.streamEventBytes = stream_->eventBytes;
+    diagnostics.jsonErrorOffset = stream_->jsonErrorOffset;
     diagnostics.responseBytes = stream_->wireBytes;
     diagnostics.contentBytes = stream_->contentBytes;
     diagnostics.reasoningBytes = stream_->reasoningBytes;
@@ -526,7 +565,8 @@ void QwenClient::handleReplyFinished() {
     const auto document = QJsonDocument::fromJson(payload, &parseError);
     const auto object = document.object();
     const auto choices = object.value(QStringLiteral("choices")).toArray();
-    ResponseDiagnostics diagnostics;
+    ResponseDiagnostics diagnostics =
+        receivedSse_ ? streamDiagnostics(ResponseIssue::None) : ResponseDiagnostics{};
     diagnostics.responseBytes = receivedSse_ ? stream_->wireBytes : payload.size();
     diagnostics.finishReason = QStringLiteral("missing");
     const auto usage = tokenUsage(object.value(QStringLiteral("usage")));
