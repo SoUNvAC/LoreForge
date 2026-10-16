@@ -93,17 +93,28 @@ QJsonObject analysisFor(const QJsonObject& user) {
     auto character = support;
     character.insert(QStringLiteral("name"), QStringLiteral("她"));
     character.insert(QStringLiteral("aliases"), QJsonArray{});
+    const auto raw =
+        user.value(QStringLiteral("source")).toObject().value(QStringLiteral("utf8")).toString();
+    QJsonArray segments;
+    const auto add = [&](qsizetype start, qsizetype end) {
+        if (end > start)
+            segments.append(QJsonObject{{QStringLiteral("text"), raw.mid(start, end - start)},
+                                        {QStringLiteral("kind"), QStringLiteral("narration")},
+                                        {QStringLiteral("speaker"), QString{}}});
+    };
+    qsizetype previous = 0;
+    for (const auto& quote : app::quotationRanges(raw)) {
+        add(previous, quote.first);
+        add(quote.first, quote.second);
+        previous = quote.second;
+    }
+    add(previous, raw.size());
     return {{QStringLiteral("chapter_id"), user.value(QStringLiteral("chapter_id"))},
             {QStringLiteral("characters"), QJsonArray{character}},
             {QStringLiteral("locations"), QJsonArray{}},
             {QStringLiteral("events"), QJsonArray{}},
             {QStringLiteral("summary"), summary},
-            {QStringLiteral("segments"),
-             QJsonArray{QJsonObject{
-                 {QStringLiteral("text"),
-                  user.value(QStringLiteral("source")).toObject().value(QStringLiteral("utf8"))},
-                 {QStringLiteral("kind"), QStringLiteral("narration")},
-                 {QStringLiteral("speaker"), QString{}}}}},
+            {QStringLiteral("segments"), segments},
             {QStringLiteral("important_facts"), QJsonArray{summary}},
             {QStringLiteral("open_threads"), QJsonArray{}}};
 }
@@ -310,10 +321,54 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesInvalidBlockReferences();
     void refusesInvalidMappingAndRendersLegacyHistory();
     void validatesCompleteNovelSegmentation();
+    void refusesCoarseNarrationWithoutForcingQuotesToDialogue();
 
   private:
     QTemporaryDir highlightSettings_;
 };
+
+void ChapterAnalysisPipelineTest::refusesCoarseNarrationWithoutForcingQuotesToDialogue() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(
+        QStringLiteral(
+            "# 边界测试\n\n“这是什么药？”她的眼神变得严肃。\n\n她把“甜味”这个词写下来。\n")
+            .toUtf8()));
+    const auto user =
+        QJsonDocument::fromJson(fixture.preview.snapshot.content.value(QStringLiteral("messages"))
+                                    .toArray()[1]
+                                    .toObject()
+                                    .value(QStringLiteral("content"))
+                                    .toString()
+                                    .toUtf8())
+            .object();
+    auto output = analysisFor(user);
+    auto segments = output.value(QStringLiteral("segments")).toArray();
+    QVERIFY(segments.size() > 2);
+    auto quote = segments[1].toObject();
+    quote.insert(QStringLiteral("kind"), QStringLiteral("dialogue"));
+    quote.insert(QStringLiteral("speaker"), QStringLiteral("她"));
+    segments[1] = quote;
+    output.insert(QStringLiteral("segments"), segments);
+    QVERIFY(app::resolveChapterEvidence(output, fixture.preview.snapshot.content, false)
+                .errors.isEmpty());
+    // The later quoted term is still narration, not a fabricated speaking turn.
+    QCOMPARE(segments[3].toObject().value(QStringLiteral("kind")).toString(),
+             QStringLiteral("narration"));
+    const auto raw = user.value(QStringLiteral("source")).toObject().value(QStringLiteral("utf8"));
+    output.insert(QStringLiteral("segments"),
+                  QJsonArray{QJsonObject{{QStringLiteral("text"), raw},
+                                         {QStringLiteral("kind"), QStringLiteral("narration")},
+                                         {QStringLiteral("speaker"), QString{}}}});
+    const auto rejected =
+        app::resolveChapterEvidence(output, fixture.preview.snapshot.content, false);
+    QVERIFY(!rejected.errors.isEmpty());
+    QVERIFY(rejected.errors.join('\n').contains(QStringLiteral("引号片段")));
+    QVERIFY(rejected.output.isEmpty());
+    // Covers other quotation styles, nesting and repeated text without substring guessing.
+    const auto ranges = app::quotationRanges(QStringLiteral("甲「乙『丙』丁」戊\"己\"庚“辛”"));
+    QCOMPARE(ranges.size(), 3);
+    QCOMPARE(ranges[0], (QPair<qsizetype, qsizetype>{1, 8}));
+}
 
 void ChapterAnalysisPipelineTest::validatesCompleteNovelSegmentation() {
     Fixture fixture;

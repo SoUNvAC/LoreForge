@@ -99,6 +99,10 @@ void CharacterHighlightPreviewTest::mapsUtf8AndDialogueBoundaries() {
     QVERIFY(panel.findChild<QLabel*>(QStringLiteral("highlightPreviewStatus"))
                 ->text()
                 .contains(QStringLiteral("候选")));
+    const auto status = panel.findChild<QLabel*>(QStringLiteral("highlightPreviewStatus"))->text();
+    QVERIFY(status.contains(QStringLiteral("对白 3 段")));
+    QVERIFY(status.contains(QStringLiteral("叙述 3 段")));
+    QVERIFY(status.contains(QStringLiteral("待确认 1 段")));
     auto* filter = panel.findChild<QComboBox*>(QStringLiteral("highlightCharacterFilter"));
     QCOMPARE(filter->count(), 6);
     filter->setCurrentIndex(1);

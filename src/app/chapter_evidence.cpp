@@ -80,6 +80,36 @@ QJsonObject narrativeOutput(QJsonObject normalized) {
     return normalized;
 }
 
+QList<QPair<qsizetype, qsizetype>> quotationRanges(const QString& text) {
+    QList<QPair<qsizetype, qsizetype>> result;
+    QList<QChar> closing;
+    qsizetype start = 0;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const auto ch = text[i];
+        if (!closing.isEmpty() && ch == closing.last()) {
+            closing.removeLast();
+            if (closing.isEmpty())
+                result.append({start, i + 1});
+            continue;
+        }
+        QChar end;
+        if (ch == QChar(0x201c))
+            end = QChar(0x201d);
+        else if (ch == QChar(0x300c))
+            end = QChar(0x300d);
+        else if (ch == QChar(0x300e))
+            end = QChar(0x300f);
+        else if (ch == QLatin1Char('"'))
+            end = ch;
+        if (!end.isNull()) {
+            if (closing.isEmpty())
+                start = i;
+            closing.append(end);
+        }
+    }
+    return result;
+}
+
 ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
                                                const QJsonObject& snapshot, bool review) {
     ResolvedChapterEvidence result;
@@ -197,6 +227,8 @@ ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
             names.insert(character.toObject().value(QStringLiteral("name")).toString());
         QJsonArray resolved;
         qint64 offset = 0;
+        qsizetype textOffset = 0;
+        QSet<qsizetype> boundaries{0};
         if (!segments.isArray() || segments.toArray().isEmpty())
             result.errors.append(QStringLiteral("$.segments: 缺少完整正文分割结果。"));
         for (const auto& item : segments.toArray()) {
@@ -222,10 +254,27 @@ ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
             offset += text.size();
             segment.insert(QStringLiteral("source_end"), base + offset);
             resolved.append(segment);
+            textOffset += segment.value(QStringLiteral("text")).toString().size();
+            boundaries.insert(textOffset);
         }
         if (offset != bytes.size())
             result.errors.append(QStringLiteral(
                 "$.segments: 分割未完整覆盖原文（包括标点、标题和换行），未接受结果。"));
+        if (result.errors.isEmpty()) {
+            for (const auto& quote :
+                 quotationRanges(source.value(QStringLiteral("utf8")).toString())) {
+                if (!boundaries.contains(quote.first) || !boundaries.contains(quote.second)) {
+                    result.errors.append(
+                        QStringLiteral("$.segments: 引号片段与周围叙述未分开（字符位置 "
+                                       "%1–%"
+                                       "2）；不能把整章或整段标为叙述来代替分割。引文未必是对白，请"
+                                       "单独分类；不明时用 unknown。")
+                            .arg(quote.first)
+                            .arg(quote.second));
+                    break;
+                }
+            }
+        }
         normalized.insert(QStringLiteral("segments"), resolved);
     }
     if (result.errors.isEmpty())

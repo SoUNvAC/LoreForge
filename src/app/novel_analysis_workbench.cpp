@@ -30,7 +30,7 @@ QString verdictText(const QString& value) {
         return NovelAnalysisWorkbench::tr("需人工判断");
     return NovelAnalysisWorkbench::tr("未知");
 }
-QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry) {
+QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry, QStringList* errors = nullptr) {
     if (!entry.artifacts.parsedResponse)
         return {};
     const auto output = entry.artifacts.parsedResponse->object();
@@ -39,10 +39,12 @@ QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry) {
     if (entry.artifacts.outputSchemaVersion != 2 &&
         entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
         return {};
-    return resolveChapterEvidence(
-               output, entry.context.content,
-               entry.context.content.value(QStringLiteral("role_index")).toInt() != 0)
-        .output;
+    const auto resolved = resolveChapterEvidence(
+        output, entry.context.content,
+        entry.context.content.value(QStringLiteral("role_index")).toInt() != 0);
+    if (errors)
+        *errors = resolved.errors;
+    return resolved.output;
 }
 void attachEvidence(QTreeWidgetItem* item, const QByteArray& bytes, qint64 base, qint64 start,
                     qint64 end) {
@@ -510,7 +512,8 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         taskStatus_->setText(tr("历史任务未完成或失败；已校验分析仅为候选，尚未最终通过。"));
     }
     if (good(analyzer)) {
-        const auto output = evidenceOutput(*analyzer);
+        QStringList segmentationErrors;
+        const auto output = evidenceOutput(*analyzer, &segmentationErrors);
         const auto finalPass = good(checker) && good(reviewer) &&
                                checker->artifacts.parsedResponse->object()
                                        .value(QStringLiteral("verdict"))
@@ -521,7 +524,10 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         emit highlightSourceChanged(
             analyzer->context.content.value(QStringLiteral("book_id")).toString(bookId_),
             analyzer->context.content.value(QStringLiteral("source")).toObject(), output,
-            finalPass
+            !segmentationErrors.isEmpty()
+                ? tr("所选历史不满足正文分割校验：%1\n请从头重新分析；不会将其作为有效分割显示。")
+                      .arg(segmentationErrors.join(QLatin1Char('\n')))
+            : finalPass
                 ? tr("三角色流程通过（同模型意见）；显示正文分割与说话人归属，请核对模型判断。")
                 : tr("候选预览：后续角色未完成、存在分歧或建议重做；不是最终确认结果。"));
     } else {

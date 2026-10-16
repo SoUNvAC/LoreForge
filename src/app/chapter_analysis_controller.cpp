@@ -481,7 +481,10 @@ void ChapterAnalysisController::nextRole() {
                 "必须同时检查 analysis.segments "
                 "的正文分割：对白仅含实际发言，叙述、动作、神态和心理不得归给说话人；"
                 "根据上下文检查 speaker 是否正确，不能因提到某人物就归给他。错误时给 "
-                "redo，无法判断给 human，附所在段落证据。");
+                "redo，无法判断给 human，附所在段落证据。"
+                "特别检查遗漏对白：原文有对话而 segments 全为 "
+                "narration、或只有一两大段覆盖整章时，不得直接 pass。"
+                "必须逐段阅读并核对；引号也可能是引用、词语或心理，不能仅凭引号判定发言。");
         rolePreview_.prompt = inference::makePromptVersion(
             {core::PromptTemplateId::fromStableKey(QStringLiteral("markdown-chapter-") + name),
              name},

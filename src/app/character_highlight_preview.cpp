@@ -368,8 +368,9 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
     }
     const auto segments = analysis.value(QStringLiteral("segments")).toArray();
     if (segments.isEmpty()) {
-        status_->setText(tr("所选任务没有正文分割结果（旧版分析或本轮尚未完成）。当前仅显示未分割原"
-                            "文；需运行新版单章分析，不会用人物证据替代。"));
+        status_->setText(status + QLatin1Char('\n') +
+                         tr("所选任务没有可显示的正文分割结果（旧版分析、本轮尚未完成或校验未通过）"
+                            "。当前仅显示未分割原文，不会用人物证据替代。"));
         return;
     }
     qint64 covered = base;
@@ -511,9 +512,31 @@ void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& 
         }
         previous = edge.key();
     }
-    status_->setText(std::move(status) + tr("\n%1 位人物 · %2 段正文分割；原文为所选任务快照。")
-                                             .arg(characterCount)
-                                             .arg(spans_.size()));
+    int dialogueCount = 0, narrationCount = 0, uncertainCount = 0;
+    for (const auto& value : segments) {
+        const auto part = value.toObject();
+        const auto kind = part.value(QStringLiteral("kind")).toString();
+        if (kind == QStringLiteral("dialogue"))
+            ++dialogueCount;
+        if (kind == QStringLiteral("narration"))
+            ++narrationCount;
+        if (kind == QStringLiteral("unknown") ||
+            (kind == QStringLiteral("dialogue") &&
+             part.value(QStringLiteral("speaker")).toString().isEmpty()))
+            ++uncertainCount;
+    }
+    status_->setText(std::move(status) +
+                     tr("\n%1 位人物 · %2 段正文分割；原文为所选任务快照。")
+                         .arg(characterCount)
+                         .arg(segments.size()) +
+                     tr("\n对白 %1 段 · 叙述 %2 段 · 待确认 %3 "
+                        "段（含说话人不明的对白）；人物栏仅统计该人物的对白。")
+                         .arg(dialogueCount)
+                         .arg(narrationCount)
+                         .arg(uncertainCount));
+    if (dialogueCount == 0)
+        status_->setText(status_->text() + tr("\n注意：模型没有识别出任何对白，请人工核对；叙述不分"
+                                              "配给人物，0 段不等于读取失败。"));
     rebuildLegend();
     settings_->sync();
     if (settings_->status() != QSettings::NoError)
