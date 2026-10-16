@@ -36,7 +36,7 @@ QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry, QStringList* error
     const auto output = entry.artifacts.parsedResponse->object();
     if (entry.artifacts.outputSchemaVersion == 1)
         return output; // Historical byte-range contracts remain read-only and renderable.
-    if (entry.artifacts.outputSchemaVersion != 2 &&
+    if (entry.artifacts.outputSchemaVersion != 2 && entry.artifacts.outputSchemaVersion != 3 &&
         entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
         return {};
     const auto resolved = resolveChapterEvidence(
@@ -96,12 +96,17 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     auto* buttons = new QHBoxLayout;
     prepare_ = new QPushButton(tr("仅预览原文与请求（可选）"), this);
     prepare_->setObjectName(QStringLiteral("llmPrepareChapterPreview"));
-    analyze_ = new QPushButton(tr("从头重新分析"), this);
+    analyze_ = new QPushButton(tr("综合分析（原流程）"), this);
     analyze_->setObjectName(QStringLiteral("llmAnalyzeChapter"));
+    dialogue_ = new QPushButton(tr("独立对白分割"), this);
+    dialogue_->setObjectName(QStringLiteral("dialogueSegmentChapter"));
+    dialogue_->setToolTip(
+        tr("专门识别本章人物与发声片段，不提取剧情、摘要或伏笔；随后只复核分割。"));
     resume_ = new QPushButton(tr("继续复核与审查"), this);
     resume_->setObjectName(QStringLiteral("analysisContinueTask"));
     cancel_ = new QPushButton(tr("取消任务"), this);
     cancel_->setObjectName(QStringLiteral("analysisCancelTask"));
+    buttons->addWidget(dialogue_);
     buttons->addWidget(analyze_);
     buttons->addWidget(resume_);
     buttons->addWidget(prepare_);
@@ -217,11 +222,12 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     connect(historyList_, &QListWidget::currentRowChanged, this,
             &NovelAnalysisWorkbench::showHistoryEntry);
     connect(analyze_, &QPushButton::clicked, this, [this] { confirmAndStart(false); });
+    connect(dialogue_, &QPushButton::clicked, this, [this] { confirmAndStart(false, true); });
     connect(resume_, &QPushButton::clicked, this, [this] { confirmAndStart(true); });
     updateButtons();
 }
 
-void NovelAnalysisWorkbench::confirmAndStart(bool continuing) {
+void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly) {
     if (busy_ || !available_) {
         return;
     }
@@ -236,6 +242,8 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing) {
             return;
         }
     }
+    if (!continuing)
+        dialogueOnly_ = dialogueOnly;
     // Preparation is local and synchronous; every start rechecks current source.
     emit chapterPreviewRequested(contextLimit_->value(), outputBudget_->value());
     if (!preview_)
@@ -244,6 +252,8 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing) {
     QMessageBox dialog(
         QMessageBox::Question, tr("确认发送本章"),
         tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
+            (dialogueOnly_ ? tr("本次任务：独立人物与对白分割；不提取剧情、摘要或伏笔。\n")
+                           : tr("本次任务：原综合分析流程。\n")) +
             (continuing
                  ? tr("复用：%1\n即将运行：%2（最多 %3 "
                       "次新请求）。\n继续前会重新核验原文、配置及前序结果。\n")
@@ -279,6 +289,7 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing) {
 void NovelAnalysisWorkbench::updateButtons() {
     prepare_->setEnabled(available_ && !busy_);
     analyze_->setEnabled(available_ && !busy_);
+    dialogue_->setEnabled(available_ && !busy_);
     resume_->setVisible(resumePrefix_ == 1 || resumePrefix_ == 2);
     resume_->setEnabled(available_ && !busy_ && (resumePrefix_ == 1 || resumePrefix_ == 2));
     resume_->setText(resumePrefix_ == 2 ? tr("继续审查") : tr("继续复核与审查"));
@@ -432,7 +443,11 @@ void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QS
                                               : tr("未完成/可能中断")));
         historyList_->addItem(
             tr("%1 · %2 · %3 · %4")
-                .arg(entry.run.startedAt.toLocalTime().toString(Qt::ISODate))
+                .arg((entry.context.content.value(QStringLiteral("task_kind")).toString() ==
+                              QStringLiteral("dialogue")
+                          ? tr("[独立对白] ")
+                          : tr("[综合分析] ")) +
+                     entry.run.startedAt.toLocalTime().toString(Qt::ISODate))
                 .arg(role == 0 ? tr("分析") : (role == 1 ? tr("复核") : tr("审查")), status,
                      entry.run.model));
     }
@@ -456,6 +471,8 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
         return;
     }
     const auto& entry = history_[index];
+    dialogueOnly_ = entry.context.content.value(QStringLiteral("task_kind")).toString() ==
+                    QStringLiteral("dialogue");
     displayedSource_ = entry.context.content.value(QStringLiteral("source")).toObject();
     // History is always rendered against its immutable source, not the current file.
     sourcePreview_->setPlainText(displayedSource_.value(QStringLiteral("utf8")).toString());
@@ -484,7 +501,7 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
             roles[role]->artifacts.promptVersion != chapterPromptVersion) {
             resumePrefix_ = 0;
             previewStatus_->setText(
-                tr("旧版证据契约：可查看历史；请从头重新分析，以使用段落编号证据。"));
+                tr("旧版任务契约：可查看历史；请重新开始对应任务，以使用当前提示词与输出契约。"));
             break;
         }
     }
@@ -591,7 +608,10 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
         const auto basis =
             claim.value(QStringLiteral("inferred")).toBool() ? tr("推断") : tr("原文证据");
         auto* item = new QTreeWidgetItem(
-            tree, {label, basis + QStringLiteral(" / ") +
+            tree,
+            {label, !claim.contains(QStringLiteral("confidence"))
+                        ? tr("对白任务人物识别（模型判断）")
+                        : basis + QStringLiteral(" / ") +
                               QString::number(claim.value(QStringLiteral("confidence")).toDouble(),
                                               'f', 2)});
         for (const auto& value : claim.value(QStringLiteral("evidence")).toArray()) {
@@ -608,6 +628,7 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
             attachEvidence(evidence, bytes, base, start, end);
         }
         item->setExpanded(true);
+        return item;
     };
     for (const auto& value : output.value(QStringLiteral("characters")).toArray()) {
         const auto claim = value.toObject();
@@ -615,17 +636,56 @@ void NovelAnalysisWorkbench::renderAnalysis(const QJsonObject& output, const QJs
         for (const auto& alias : claim.value(QStringLiteral("aliases")).toArray()) {
             aliases.append(alias.toObject().value(QStringLiteral("name")).toString());
         }
-        add(results_[0], claim,
-            claim.value(QStringLiteral("name")).toString() +
-                (aliases.isEmpty() ? QString{}
-                                   : tr("（别名：%1）").arg(aliases.join(QStringLiteral("、")))));
+        auto* person = add(results_[0], claim,
+                           claim.value(QStringLiteral("name")).toString() +
+                               (aliases.isEmpty()
+                                    ? QString{}
+                                    : tr("（别名：%1）").arg(aliases.join(QStringLiteral("、")))));
+        if (!output.contains(QStringLiteral("summary"))) {
+            int turns = 0;
+            for (const auto& segmentValue : output.value(QStringLiteral("segments")).toArray()) {
+                const auto part = segmentValue.toObject();
+                if (part.value(QStringLiteral("kind")).toString() != QStringLiteral("dialogue") ||
+                    part.value(QStringLiteral("speaker")) != claim.value(QStringLiteral("name")))
+                    continue;
+                auto* turn = new QTreeWidgetItem(
+                    person, {tr("【%1】").arg(part.value(QStringLiteral("text")).toString()),
+                             tr("发声片段 %1").arg(++turns)});
+                attachEvidence(turn, bytes, base,
+                               part.value(QStringLiteral("source_start")).toInteger(),
+                               part.value(QStringLiteral("source_end")).toInteger());
+            }
+            person->setText(1, tr("%1 个发声片段（模型归属）").arg(turns));
+        }
     }
-    add(results_[1], output.value(QStringLiteral("summary")).toObject(),
-        tr("摘要：%1")
-            .arg(output.value(QStringLiteral("summary"))
-                     .toObject()
-                     .value(QStringLiteral("text"))
-                     .toString()));
+    if (!output.isEmpty() && !output.contains(QStringLiteral("summary"))) {
+        auto* uncertain = new QTreeWidgetItem(results_[0], {tr("待确认"), tr("类型或说话人不明")});
+        for (const auto& value : output.value(QStringLiteral("segments")).toArray()) {
+            const auto part = value.toObject();
+            if (part.value(QStringLiteral("kind")).toString() != QStringLiteral("unknown") &&
+                !(part.value(QStringLiteral("kind")).toString() == QStringLiteral("dialogue") &&
+                  part.value(QStringLiteral("speaker")).toString().isEmpty()))
+                continue;
+            auto* turn = new QTreeWidgetItem(
+                uncertain, {tr("【%1】").arg(part.value(QStringLiteral("text")).toString()),
+                            tr("未强行分配说话人")});
+            attachEvidence(turn, bytes, base,
+                           part.value(QStringLiteral("source_start")).toInteger(),
+                           part.value(QStringLiteral("source_end")).toInteger());
+        }
+        uncertain->setExpanded(true);
+        for (int i = 1; i <= 3; ++i)
+            new QTreeWidgetItem(
+                results_[i],
+                {tr("独立对白任务不生成此类内容；如需剧情、摘要或伏笔，请另行运行综合分析。")});
+    }
+    if (output.contains(QStringLiteral("summary")))
+        add(results_[1], output.value(QStringLiteral("summary")).toObject(),
+            tr("摘要：%1")
+                .arg(output.value(QStringLiteral("summary"))
+                         .toObject()
+                         .value(QStringLiteral("text"))
+                         .toString()));
     for (const auto& value : output.value(QStringLiteral("events")).toArray()) {
         add(results_[1], value.toObject(),
             value.toObject().value(QStringLiteral("description")).toString());

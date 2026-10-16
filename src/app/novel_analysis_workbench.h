@@ -30,6 +30,9 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showHistory(QList<AnalysisHistoryEntry> history, QString chapterId);
     [[nodiscard]] const std::optional<ChapterPreview>& preview() const noexcept;
     void invalidatePreview();
+    [[nodiscard]] bool dialogueOnly() const noexcept {
+        return dialogueOnly_;
+    }
 
   signals:
     void budgetsChanged(int maximumTokens, int reservedTokens);
@@ -47,7 +50,9 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showHistoryEntry(int index);
     void renderAnalysis(const QJsonObject& output, const QJsonObject& source);
     void updateButtons();
-    void confirmAndStart(bool continuing);
+    void confirmAndStart(bool continuing, bool dialogueOnly = false);
+    bool dialogueOnly_ = false;
+    QPushButton* dialogue_ = nullptr;
     QComboBox* chapters_ = nullptr;
     QSpinBox* contextLimit_ = nullptr;
     QSpinBox* outputBudget_ = nullptr;

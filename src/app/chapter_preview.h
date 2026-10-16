@@ -22,7 +22,7 @@ class ChapterPreviewBuilder final {
   public:
     [[nodiscard]] static storage::StorageResult<ChapterPreview>
     build(const core::ProjectId& projectId, const document::Document& book, qsizetype chapterIndex,
-          int maximumTokens, int reservedTokens);
+          int maximumTokens, int reservedTokens, bool dialogueOnly = false);
     [[nodiscard]] static storage::StorageResult<ChapterPreview>
     store(storage::ProjectDatabase& database, ChapterPreview preview);
 };

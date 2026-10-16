@@ -3,6 +3,8 @@ qt_add_library(
     chapter_preview.cpp
     chapter_preview.h
     chapter_evidence.cpp
+    dialogue_segmentation.cpp
+    dialogue_segmentation.h
     chapter_evidence.h
     character_highlight_preview.cpp
     character_highlight_preview.h

@@ -1,4 +1,5 @@
 #include "chapter_evidence.h"
+#include "dialogue_segmentation.h"
 
 #include <QJsonArray>
 #include <QMap>
@@ -113,6 +114,9 @@ QList<QPair<qsizetype, qsizetype>> quotationRanges(const QString& text) {
 ResolvedChapterEvidence resolveChapterEvidence(const QJsonObject& output,
                                                const QJsonObject& snapshot, bool review) {
     ResolvedChapterEvidence result;
+    if (!review &&
+        snapshot.value(QStringLiteral("task_kind")).toString() == QStringLiteral("dialogue"))
+        return resolveDialogue(output, snapshot);
     if (!output.value(QStringLiteral("chapter_id")).isString() ||
         output.value(QStringLiteral("chapter_id")) !=
             snapshot.value(QStringLiteral("chapter_id"))) {

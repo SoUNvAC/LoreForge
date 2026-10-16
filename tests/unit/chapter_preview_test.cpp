@@ -70,7 +70,7 @@ void ChapterPreviewTest::capturesExactCurrentChapterWithProvenance() {
     QCOMPARE(user.value(QStringLiteral("source")).toObject(), span);
     QCOMPARE(user.value(QStringLiteral("output_schema")).toObject(), preview.schema.schema);
     QCOMPARE(preview.prompt.version, loreforge::app::chapterPromptVersion);
-    QCOMPARE(preview.schema.version, 3);
+    QCOMPARE(preview.schema.version, loreforge::app::chapterWireSchemaVersion);
     QVERIFY(!user.contains(QStringLiteral("source_ranges")));
     const auto sourceBlocks = user.value(QStringLiteral("source_blocks")).toArray();
     const auto savedBlocks = content.value(QStringLiteral("blocks")).toArray();

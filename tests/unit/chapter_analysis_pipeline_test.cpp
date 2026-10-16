@@ -1,6 +1,7 @@
 #include "chapter_analysis_controller.h"
 #include "chapter_evidence.h"
 #include "character_highlight_preview.h"
+#include "dialogue_segmentation.h"
 #include "main_window.h"
 #include "markdown_source_fixture.h"
 #include "novel_analysis_workbench.h"
@@ -42,7 +43,8 @@ struct Fixture {
     app::ChapterPreview preview;
     core::ProjectId projectId = core::ProjectId::fromStableKey(QStringLiteral("pipeline-fixture"));
     QString path;
-    bool initialize(const QByteArray& chapter = test::markdownFixtureChapter()) {
+    bool initialize(const QByteArray& chapter = test::markdownFixtureChapter(),
+                    bool dialogue = false) {
         if (!test::createMarkdownFixture(source.path())) {
             return false;
         }
@@ -67,7 +69,7 @@ struct Fixture {
             books.saveDocument(projectId, book)) {
             return false;
         }
-        auto built = app::ChapterPreviewBuilder::build(projectId, book, 0, 32768, 4096);
+        auto built = app::ChapterPreviewBuilder::build(projectId, book, 0, 32768, 4096, dialogue);
         if (!std::holds_alternative<app::ChapterPreview>(built)) {
             return false;
         }
@@ -82,6 +84,26 @@ struct Fixture {
 };
 
 QJsonObject analysisFor(const QJsonObject& user) {
+    if (user.contains(QStringLiteral("source_units"))) {
+        QJsonArray segments;
+        for (const auto& value : user.value(QStringLiteral("source_units")).toArray()) {
+            const auto unit = value.toObject();
+            const auto quoted =
+                unit.value(QStringLiteral("text")).toString().startsWith(QChar(0x201c));
+            segments.append(QJsonObject{
+                {QStringLiteral("first_unit"), unit.value(QStringLiteral("unit_id"))},
+                {QStringLiteral("last_unit"), unit.value(QStringLiteral("unit_id"))},
+                {QStringLiteral("kind"),
+                 quoted ? QStringLiteral("dialogue") : QStringLiteral("narration")},
+                {QStringLiteral("speaker"), quoted ? QStringLiteral("她") : QString{}}});
+        }
+        return {{QStringLiteral("chapter_id"), user.value(QStringLiteral("chapter_id"))},
+                {QStringLiteral("characters"),
+                 QJsonArray{
+                     QJsonObject{{QStringLiteral("name"), QStringLiteral("她")},
+                                 {QStringLiteral("aliases"), QJsonArray{QStringLiteral("小晴")}}}}},
+                {QStringLiteral("segments"), segments}};
+    }
     const auto range = user.value(QStringLiteral("source_blocks")).toArray().at(1).toObject();
     const QJsonArray evidence{
         QJsonObject{{QStringLiteral("block_id"), range.value(QStringLiteral("block_id"))}}};
@@ -322,10 +344,152 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesInvalidMappingAndRendersLegacyHistory();
     void validatesCompleteNovelSegmentation();
     void refusesCoarseNarrationWithoutForcingQuotesToDialogue();
+    void independentlySegmentsAndContinuesWithoutRepeatingExtraction();
+    void confirmsIndependentDialogueFromMainWindow();
 
   private:
     QTemporaryDir highlightSettings_;
 };
+
+void ChapterAnalysisPipelineTest::confirmsIndependentDialogueFromMainWindow() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(
+        QStringLiteral("# 门边\n\n“……”她低头。\n“我……我不……”她退开。\n").toUtf8()));
+    Server server;
+    app::MainWindow window;
+    QVERIFY(window.openProjectFile(fixture.path));
+    auto* llm = window.findChild<QWidget*>(QStringLiteral("llmWorkbench"));
+    llm->findChild<QLineEdit*>(QStringLiteral("llmEndpoint"))
+        ->setText(server.connection().options.endpoint.toString());
+    llm->findChild<QLineEdit*>(QStringLiteral("llmModelId"))
+        ->setText(QStringLiteral("fixture-model"));
+    llm->findChild<QLineEdit*>(QStringLiteral("llmApiKey"))
+        ->setText(QStringLiteral("dialogue-test-key"));
+    llm->findChild<QCheckBox*>(QStringLiteral("llmAllowHttp"))->setChecked(true);
+    llm->findChild<QComboBox*>(QStringLiteral("llmResponseFormat"))
+        ->setCurrentText(QStringLiteral("json_object"));
+    auto* start = window.findChild<QPushButton*>(QStringLiteral("dialogueSegmentChapter"));
+    QVERIFY(start->isEnabled());
+    QTimer::singleShot(0, &window, [&window] {
+        auto* dialog = window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation"));
+        QVERIFY(dialog);
+        QVERIFY(dialog->text().contains(QStringLiteral("独立人物与对白分割")));
+        dialog->reject();
+    });
+    start->click();
+    QCOMPARE(server.requests.size(), 0);
+    QTimer::singleShot(0, &window, [&window] {
+        auto* dialog = window.findChild<QMessageBox*>(QStringLiteral("analysisSendConfirmation"));
+        QVERIFY(dialog);
+        dialog->findChild<QPushButton*>(QStringLiteral("analysisConfirmSend"))->click();
+    });
+    start->click();
+    QTRY_VERIFY(window.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"))
+                    ->text()
+                    .startsWith(QStringLiteral("通过（")));
+    QCOMPARE(server.requests.size(), 3);
+    auto entries = history(fixture);
+    QVERIFY(entries.last().context.content.value(QStringLiteral("task_kind")).toString() ==
+            QStringLiteral("dialogue"));
+    auto* highlight = window.findChild<app::CharacterHighlightText*>();
+    QVERIFY(!highlight->spans().isEmpty());
+    const auto* people = qobject_cast<QTreeWidget*>(
+        window.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"))->widget(0));
+    QCOMPARE(people->topLevelItem(0)->childCount(), 2);
+    if (const auto path = qEnvironmentVariable("LOREFORGE_DIALOGUE_PAGE_IMAGE"); !path.isEmpty()) {
+        const auto font =
+            QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc"));
+        const auto families = QFontDatabase::applicationFontFamilies(font);
+        if (!families.isEmpty())
+            window.setFont(QFont(families.first(), 10));
+        window.findChild<QTabWidget*>(QStringLiteral("workspacePages"))->setCurrentIndex(2);
+        window.resize(1400, 1200);
+        window.show();
+        QTest::qWait(30);
+        QVERIFY(window.grab().save(path));
+    }
+}
+
+void ChapterAnalysisPipelineTest::independentlySegmentsAndContinuesWithoutRepeatingExtraction() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(QStringLiteral("# "
+                                              "独立分割\r\n\r\n“……”她低下头。\r\n“呜……呜……”她哭了。"
+                                              "\r\n“……”她又沉默。\r\n“我……我不……”她退开。\r\n")
+                                   .toUtf8(),
+                               true));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int index) {
+        if (!user.contains(QStringLiteral("analysis")))
+            return analysisFor(user);
+        auto review = reviewFor(user);
+        if (index == 1)
+            review.insert(QStringLiteral("chapter_id"), QStringLiteral("wrong-chapter"));
+        return review;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(server.requests.size(), 2);
+    auto entries = history(fixture);
+    QCOMPARE(entries[0].run.status, storage::LLMRunStatus::Succeeded);
+    QCOMPARE(entries[1].run.status, storage::LLMRunStatus::Failed);
+    const auto normalized =
+        entries[0].outcome.value(QStringLiteral("normalized_output")).toObject();
+    int utterances = 0, silence = 0;
+    QSet<qint64> repeatedPositions;
+    for (const auto& value : normalized.value(QStringLiteral("segments")).toArray()) {
+        const auto part = value.toObject();
+        if (part.value(QStringLiteral("kind")).toString() == QStringLiteral("dialogue"))
+            ++utterances;
+        if (part.value(QStringLiteral("text")).toString() == QStringLiteral("“……”")) {
+            ++silence;
+            repeatedPositions.insert(part.value(QStringLiteral("source_start")).toInteger());
+        }
+    }
+    QCOMPARE(utterances, 4);
+    QCOMPARE(silence, 2);
+    QCOMPARE(repeatedPositions.size(), 2);
+    QVERIFY(!normalized.contains(QStringLiteral("events")));
+    const auto user = QJsonDocument::fromJson(server.requests[0]
+                                                  .value(QStringLiteral("messages"))
+                                                  .toArray()[1]
+                                                  .toObject()
+                                                  .value(QStringLiteral("content"))
+                                                  .toString()
+                                                  .toUtf8())
+                          .object();
+    QVERIFY(user.contains(QStringLiteral("source_units")));
+    QVERIFY(!user.contains(QStringLiteral("source")));
+    QVERIFY(!user.contains(QStringLiteral("source_blocks")));
+    const auto raw = entries[0].artifacts.parsedResponse->object();
+    QVERIFY(!raw.value(QStringLiteral("segments"))
+                 .toArray()[0]
+                 .toObject()
+                 .contains(QStringLiteral("text")));
+    const auto pipeline =
+        entries[0].context.content.value(QStringLiteral("pipeline_id")).toString();
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection(), pipeline);
+    QTRY_COMPARE(finished.size(), 2);
+    QCOMPARE(server.requests.size(), 4);
+    entries = history(fixture);
+    QCOMPARE(entries.last().run.status, storage::LLMRunStatus::Succeeded);
+    QCOMPARE(app::completedRolePrefix(app::latestPipelineRoles(entries, pipeline)), 3);
+    app::NovelAnalysisWorkbench page;
+    page.setSelectedBook(&fixture.book, 0);
+    QSignalSpy preview(&page, &app::NovelAnalysisWorkbench::highlightSourceChanged);
+    page.showHistory(entries, fixture.book.chapters[0].id.toString());
+    QVERIFY(!preview.isEmpty());
+    QVERIFY(!qvariant_cast<QJsonObject>(preview.last()[2])
+                 .value(QStringLiteral("segments"))
+                 .toArray()
+                 .isEmpty());
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("dialogueSegmentChapter"))->isEnabled());
+    const auto* people = qobject_cast<QTreeWidget*>(
+        page.findChild<QTabWidget*>(QStringLiteral("analysisResultTabs"))->widget(0));
+    QCOMPARE(people->topLevelItem(0)->childCount(), 4);
+    QVERIFY(people->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("……")));
+}
 
 void ChapterAnalysisPipelineTest::refusesCoarseNarrationWithoutForcingQuotesToDialogue() {
     Fixture fixture;
@@ -939,7 +1103,7 @@ void ChapterAnalysisPipelineTest::confirmsContinuationAndShowsReviewReasons() {
     QVERIFY(resume->isHidden());
     QCOMPARE(server.requests.size(), 4);
     QCOMPARE(window.findChild<QPushButton*>(QStringLiteral("llmAnalyzeChapter"))->text(),
-             QStringLiteral("从头重新分析"));
+             QStringLiteral("综合分析（原流程）"));
     QVERIFY(capture(QStringLiteral("-review")));
 }
 

@@ -848,7 +848,8 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
     }
     auto built = ChapterPreviewBuilder::build(
         workspace_->projects.at(selectedProjectIndex_).metadata.id, *book,
-        item->data(0, kChapterIndexRole).toLongLong(), maximumTokens, reservedTokens);
+        item->data(0, kChapterIndexRole).toLongLong(), maximumTokens, reservedTokens,
+        analysisWorkbench_->dialogueOnly());
     if (const auto* error = std::get_if<storage::StorageError>(&built)) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
@@ -902,7 +903,9 @@ void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndp
     const auto checked = ChapterPreviewBuilder::build(
         preview.snapshot.projectId, *book, item->data(0, kChapterIndexRole).toLongLong(),
         preview.snapshot.content.value(QStringLiteral("maximum_tokens")).toInt(),
-        preview.snapshot.content.value(QStringLiteral("reserved_output_tokens")).toInt());
+        preview.snapshot.content.value(QStringLiteral("reserved_output_tokens")).toInt(),
+        preview.snapshot.content.value(QStringLiteral("task_kind")).toString() ==
+            QStringLiteral("dialogue"));
     if (!std::holds_alternative<ChapterPreview>(checked) ||
         std::get<ChapterPreview>(checked).snapshot.id != preview.snapshot.id) {
         analysisWorkbench_->invalidatePreview();
