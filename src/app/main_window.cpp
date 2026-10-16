@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "character_highlight_preview.h"
 #include "stream_monitor_widget.h"
 
 #include "context_inspector.h"
@@ -233,6 +234,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     analysisWorkbench_ = new NovelAnalysisWorkbench(analysisScroll);
     analysisScroll->setWidget(analysisWorkbench_);
     pages->addTab(analysisScroll, tr("小说分析"));
+    auto* highlightPreview = new CharacterHighlightPreview(pages);
+    pages->addTab(highlightPreview, tr("分割预览"));
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::highlightImportedTextChanged,
+            highlightPreview, &CharacterHighlightPreview::showImportedText);
+    connect(analysisWorkbench_, &NovelAnalysisWorkbench::highlightSourceChanged, highlightPreview,
+            &CharacterHighlightPreview::showAnalysis);
     analysisController_ = new ChapterAnalysisController(this);
     analysisWorkbench_->setConnectionValidator([this, pages] {
         const auto result = llmWorkbench_->analysisConnection();
@@ -293,6 +300,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         .arg(status, usage)
                         .arg(latency));
             });
+    connect(
+        analysisController_, &ChapterAnalysisController::roleChanged, this,
+        [this](int role, const QString& status, const QString&, qint64) {
+            if (role == 0 && status.startsWith(QStringLiteral("输出校验通过")))
+                reloadAnalysisHistory(); // Show candidate evidence while later roles are running.
+        });
     connect(analysisController_, &ChapterAnalysisController::finished, this,
             [this](QString status) {
                 reloadAnalysisHistory();

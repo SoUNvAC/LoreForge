@@ -1,5 +1,6 @@
 #include "chapter_analysis_controller.h"
 #include "chapter_evidence.h"
+#include "character_highlight_preview.h"
 #include "main_window.h"
 #include "markdown_source_fixture.h"
 #include "novel_analysis_workbench.h"
@@ -269,6 +270,10 @@ QList<app::AnalysisHistoryEntry> history(const Fixture& fixture) {
 class ChapterAnalysisPipelineTest final : public QObject {
     Q_OBJECT
   private slots:
+    void initTestCase() {
+        qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+    }
     void runsThreeRolesAndPersistsHistory();
     void refusesInvalidEvidenceAndTruncation_data();
     void refusesInvalidEvidenceAndTruncation();
@@ -298,6 +303,9 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void refusesInvalidBlockReferences_data();
     void refusesInvalidBlockReferences();
     void refusesInvalidMappingAndRendersLegacyHistory();
+
+  private:
+    QTemporaryDir highlightSettings_;
 };
 
 void ChapterAnalysisPipelineTest::resolvesAllClaimsAndAuditsRawIds() {
@@ -1210,21 +1218,45 @@ void ChapterAnalysisPipelineTest::requiresConfirmationAndRestoresTheAnalysisPage
         });
         analyze->click();
         auto* status = window.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"));
-        QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("通过")), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(status->text().startsWith(QStringLiteral("通过（")), 5000);
         QVERIFY(!window.findChild<QLabel*>(QStringLiteral("llmChapterPreviewStatus"))
                      ->text()
                      .contains(QStringLiteral("准备失败")));
         QCOMPARE(server.requests.size(), 3);
         QCOMPARE(window.findChild<QListWidget*>(QStringLiteral("analysisHistory"))->count(), 3);
+        auto* highlight = window.findChild<app::CharacterHighlightText*>();
+        QVERIFY(highlight);
+        QVERIFY(!highlight->spans().isEmpty());
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("highlightPreviewStatus"))
+                    ->text()
+                    .contains(QStringLiteral("三角色流程通过")));
+        auto* workspacePages = window.findChild<QTabWidget*>(QStringLiteral("workspacePages"));
+        QCOMPARE(workspacePages->count(), 4);
+        QCOMPARE(workspacePages->tabText(3), QStringLiteral("分割预览"));
         QVERIFY(window.findChild<QLabel*>(QStringLiteral("analysisTokenTotals"))
                     ->text()
                     .contains(QStringLiteral("42 token")));
         auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
         selector->setCurrentIndex(1);
+        QVERIFY(highlight->spans().isEmpty());
         QCOMPARE(window.findChild<QListWidget*>(QStringLiteral("analysisHistory"))->count(), 0);
         QVERIFY(analyze->isEnabled());
         selector->setCurrentIndex(0);
+        QVERIFY(!highlight->spans().isEmpty());
         QVERIFY(analyze->isEnabled());
+        if (const auto path = qEnvironmentVariable("LOREFORGE_SPLIT_PREVIEW_IMAGE");
+            !path.isEmpty()) {
+            const auto font =
+                QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc"));
+            const auto families = QFontDatabase::applicationFontFamilies(font);
+            if (!families.isEmpty())
+                window.setFont(QFont(families.first(), 10));
+            workspacePages->setCurrentIndex(3);
+            window.resize(1400, 1000);
+            window.show();
+            QTest::qWait(30);
+            QVERIFY(window.grab().save(path));
+        }
         if (const auto path = qEnvironmentVariable("LOREFORGE_ANALYSIS_PREVIEW_IMAGE");
             !path.isEmpty()) {
             const auto id =

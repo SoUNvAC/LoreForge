@@ -131,6 +131,11 @@ QJsonObject profile(const QString& path, const loreforge::core::ProjectId& id) {
 class LlmWorkbenchTest final : public QObject {
     Q_OBJECT
   private slots:
+    void initTestCase() {
+        QVERIFY(highlightSettings_.isValid());
+        qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+    }
     void addsSecondPageWithoutDiscardingReadingState();
     void savesProjectApiAndTemporaryKey();
     void testsPrivateApiWithoutSendingSource();
@@ -144,6 +149,9 @@ class LlmWorkbenchTest final : public QObject {
     void displaysInvalidResponseDiagnosticsAndCountsKnownUsage();
     void appliesAndPersistsThinkingMode();
     void preservesEditsWhenProjectSaveFails();
+
+  private:
+    QTemporaryDir highlightSettings_;
 };
 
 void LlmWorkbenchTest::acknowledgesFailureWithoutChangingTaskHistory() {
@@ -356,10 +364,11 @@ void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
     loreforge::app::MainWindow window;
     auto* tabs = child<QTabWidget>(window, "workspacePages");
     QVERIFY(tabs);
-    QCOMPARE(tabs->count(), 3);
+    QCOMPARE(tabs->count(), 4);
     QCOMPARE(tabs->tabText(0), QStringLiteral("阅读工作台"));
     QCOMPARE(tabs->tabText(1), QStringLiteral("LLM 工作台"));
     QCOMPARE(tabs->tabText(2), QStringLiteral("小说分析"));
+    QCOMPARE(tabs->tabText(3), QStringLiteral("分割预览"));
     auto* reader = child<QWidget>(window, "chapterReader");
     auto* context = child<QDockWidget>(window, "contextInspectorDock");
     auto* repairs = child<QDockWidget>(window, "repairQueueDock");
@@ -379,6 +388,10 @@ void LlmWorkbenchTest::addsSecondPageWithoutDiscardingReadingState() {
                  ->findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview")));
     QVERIFY(child<QWidget>(window, "novelAnalysisWorkbench")
                 ->findChild<QPushButton*>(QStringLiteral("llmPrepareChapterPreview")));
+    tabs->setCurrentIndex(3);
+    QVERIFY(context->isHidden());
+    QVERIFY(repairs->isHidden());
+    QVERIFY(child<QWidget>(window, "characterHighlightPreview"));
     tabs->setCurrentIndex(0);
     QCOMPARE(child<QWidget>(window, "chapterReader"), reader);
     QVERIFY(context->isHidden());

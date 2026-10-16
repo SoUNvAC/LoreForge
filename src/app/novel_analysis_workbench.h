@@ -39,6 +39,9 @@ class NovelAnalysisWorkbench final : public QWidget {
     void continuationRequested(QString pipelineId, bool allowLegacyEndpoint);
     void cancellationRequested();
     void metricsChanged(QString summary);
+    void highlightImportedTextChanged(QString bookId, QString text);
+    void highlightSourceChanged(QString bookId, QJsonObject source, QJsonObject analysis,
+                                QString status);
 
   private:
     void showHistoryEntry(int index);
@@ -68,6 +71,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     QList<AnalysisHistoryEntry> history_;
     QJsonObject displayedSource_;
     QString chapterId_;
+    QString bookId_;
     std::optional<ChapterPreview> preview_;
     bool available_ = false;
     bool busy_ = false;

@@ -4,6 +4,8 @@ qt_add_library(
     chapter_preview.h
     chapter_evidence.cpp
     chapter_evidence.h
+    character_highlight_preview.cpp
+    character_highlight_preview.h
     chapter_analysis_controller.cpp
     chapter_analysis_controller.h
     analysis_connection.h

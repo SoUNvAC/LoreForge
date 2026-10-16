@@ -290,6 +290,8 @@ void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsi
     const QSignalBlocker blocker(chapters_);
     chapters_->clear();
     chapterId_.clear();
+    bookId_ = book ? book->id.toString() : QString{};
+    QStringList importedText;
     available_ = false;
     if (book) {
         for (const auto& chapter : book->chapters) {
@@ -299,6 +301,8 @@ void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsi
         if (index >= 0 && index < book->chapters.size()) {
             chapterId_ = book->chapters[index].id.toString();
             available_ = book->metadata.sourceFormat == QStringLiteral("markdown-source");
+            for (const auto& block : book->chapters[index].blocks)
+                importedText.append(block.text);
         }
     }
     invalidatePreview();
@@ -313,6 +317,7 @@ void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsi
         updateRole(role, tr("尚无任务"), QStringLiteral("—"), 0);
     }
     taskStatus_->setText(tr("当前章已更新；不会自动发送。"));
+    emit highlightImportedTextChanged(bookId_, importedText.join(QStringLiteral("\n\n")));
 }
 void NovelAnalysisWorkbench::invalidatePreview() {
     preview_.reset();
@@ -341,6 +346,8 @@ void NovelAnalysisWorkbench::showChapterPreview(const ChapterPreview& preview) {
     preview_ = preview;
     displayedSource_ = preview.snapshot.content.value(QStringLiteral("source")).toObject();
     sourcePreview_->setPlainText(displayedSource_.value(QStringLiteral("utf8")).toString());
+    emit highlightSourceChanged(bookId_, displayedSource_, {},
+                                tr("原文快照预览；尚未应用人物分析结果。"));
     messages_->setPlainText(preview.messagesJson);
     previewStatus_->setText(
         tr("已保存到 .loreforge 项目；尚未发送。\n快照 ID：%1\nSHA-256：%2\n"
@@ -360,6 +367,8 @@ void NovelAnalysisWorkbench::showError(QString message) {
 void NovelAnalysisWorkbench::setBusy(bool busy) {
     busy_ = busy;
     if (busy) {
+        emit highlightSourceChanged(bookId_, displayedSource_, {},
+                                    tr("正在运行新任务；尚无本轮人物证据，不显示旧结果染色。"));
         taskStatus_->setText(tr("单章任务运行中；可取消，不自动重试。"));
         for (auto* tree : results_) {
             tree->clear();
@@ -498,6 +507,24 @@ void NovelAnalysisWorkbench::showHistoryEntry(int index) {
                                               reviewer->artifacts.parsedResponse->object()));
     } else {
         taskStatus_->setText(tr("历史任务未完成或失败；已校验分析仅为候选，尚未最终通过。"));
+    }
+    if (good(analyzer)) {
+        const auto output = evidenceOutput(*analyzer);
+        const auto finalPass = good(checker) && good(reviewer) &&
+                               checker->artifacts.parsedResponse->object()
+                                       .value(QStringLiteral("verdict"))
+                                       .toString() == QStringLiteral("pass") &&
+                               reviewer->artifacts.parsedResponse->object()
+                                       .value(QStringLiteral("verdict"))
+                                       .toString() == QStringLiteral("pass");
+        emit highlightSourceChanged(
+            analyzer->context.content.value(QStringLiteral("book_id")).toString(bookId_),
+            analyzer->context.content.value(QStringLiteral("source")).toObject(), output,
+            finalPass ? tr("三角色流程通过（同模型意见）；颜色仍仅表示人物相关证据。")
+                      : tr("候选预览：后续角色未完成、存在分歧或建议重做；不是最终确认结果。"));
+    } else {
+        emit highlightSourceChanged(bookId_, displayedSource_, {},
+                                    tr("所选流程没有有效的分析员结果，未染色。"));
     }
     const auto bytes = displayedSource_.value(QStringLiteral("utf8")).toString().toUtf8();
     const auto base = displayedSource_.value(QStringLiteral("start_byte")).toInteger();

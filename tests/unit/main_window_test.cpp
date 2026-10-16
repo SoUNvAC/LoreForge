@@ -36,6 +36,10 @@ class MainWindowTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void initTestCase() {
+        qputenv("LOREFORGE_HIGHLIGHT_SETTINGS",
+                highlightSettings_.filePath(QStringLiteral("highlight.ini")).toUtf8());
+    }
     void displaysStoredWorkspaceWithoutReorderingDomainData();
     void reportsProjectOpenFailuresInTheInterface();
     void rendersInspectableContext();
@@ -45,6 +49,9 @@ class MainWindowTest final : public QObject {
     void countsOnlyParagraphCharacters();
     void keepsMetadataBelowExplorerAndReaderFullHeight();
     void preparesChapterPreviewAndInvalidatesOnSelection();
+
+  private:
+    QTemporaryDir highlightSettings_;
 };
 
 namespace {
