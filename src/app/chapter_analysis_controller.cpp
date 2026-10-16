@@ -180,6 +180,7 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
         return;
     }
     completedSuccessfully_ = false;
+    canAdvanceChapter_ = false;
     if (connection.responseFormat != QStringLiteral("json_object") &&
         connection.responseFormat != QStringLiteral("json_schema")) {
         emit taskStatus(TaskState::Failed, QStringLiteral("分析必须使用 JSON 格式；未发送。"));
@@ -679,6 +680,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     std::optional<QJsonDocument> parsedDocument;
     std::optional<QByteArray> raw;
     bool usageKnown = false;
+    bool credentialReflected = false;
     QString responseTransport = QStringLiteral("unknown");
     QJsonObject responseDiagnostics;
     auto schemaReport = inference::ValidationReport{inference::ValidationStatus::Unavailable, {}};
@@ -717,6 +719,7 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
         if (!connection_.options.apiKey.isEmpty() &&
             (response.rawResponse.contains(connection_.options.apiKey) ||
              response.content.contains(QString::fromUtf8(connection_.options.apiKey)))) {
+            credentialReflected = true;
             errors.append(QStringLiteral("响应包含凭据，已拒绝保存和显示。"));
         } else {
             raw = withoutReasoning(response.rawResponse);
@@ -762,7 +765,8 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
     if (cancelled_) {
         errors.append(QStringLiteral("任务已取消，不能标记成功。"));
     }
-    if (!sourceUnchanged()) {
+    const bool sourceValid = sourceUnchanged();
+    if (!sourceValid) {
         errors.append(QStringLiteral("源文件已变化，结果过时。"));
     }
     if (schemaReport.status == inference::ValidationStatus::Unavailable) {
@@ -832,7 +836,10 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
                    : QStringLiteral("用量未知"),
         *run_.latencyMs);
     if (!errors.isEmpty()) {
-        stop(run_.errorMessage, cancelled_ ? TaskState::Cancelled : TaskState::Failed);
+        // Only persisted model/request failures may be skipped by the batch runner.
+        // Cancellation, stale sources and credential reflection must stop the batch.
+        stop(run_.errorMessage, cancelled_ ? TaskState::Cancelled : TaskState::Failed,
+             sourceValid && !credentialReflected);
         return;
     }
     if (!busy_ || cancelled_) {
@@ -862,13 +869,15 @@ void ChapterAnalysisController::complete(llm::LLMResult result) {
                  "部分提取可查看；%1 "
                  "条定位/归属问题需确认，未受影响的发声已保留。复核意见不能消除本地定位问题。")
                  .arg(mappingIssues.size()),
-             TaskState::Attention);
+             TaskState::Attention, true);
         return;
     }
     const auto conclusion = reviewConclusion(outputs_[1], outputs_[2]);
-    stop(conclusion, checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
-                         ? TaskState::Success
-                         : TaskState::Attention);
+    stop(conclusion,
+         checker == QStringLiteral("pass") && reviewer == QStringLiteral("pass")
+             ? TaskState::Success
+             : TaskState::Attention,
+         true);
 }
 
 void ChapterAnalysisController::cancel() {
@@ -882,8 +891,9 @@ void ChapterAnalysisController::cancel() {
         stop(QStringLiteral("已取消；不会继续后续角色。"));
     }
 }
-void ChapterAnalysisController::stop(QString message, TaskState state) {
+void ChapterAnalysisController::stop(QString message, TaskState state, bool canAdvance) {
     completedSuccessfully_ = !cancelled_ && role_ == 3 && state == TaskState::Success;
+    canAdvanceChapter_ = !cancelled_ && canAdvance;
     busy_ = false;
     emit busyChanged(false);
     emit taskStatus(cancelled_ ? TaskState::Cancelled : state, message);

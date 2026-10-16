@@ -33,6 +33,9 @@ class ChapterAnalysisController final : public QObject {
     [[nodiscard]] bool completedSuccessfully() const noexcept {
         return completedSuccessfully_;
     }
+    [[nodiscard]] bool canAdvanceChapter() const noexcept {
+        return canAdvanceChapter_;
+    }
     void start(QString databasePath, document::Document book, qsizetype chapterIndex,
                ChapterPreview preview, AnalysisConnection connection, QString resumePipeline = {},
                bool allowLegacyEndpoint = false);
@@ -52,7 +55,7 @@ class ChapterAnalysisController final : public QObject {
   private:
     void nextRole();
     void complete(llm::LLMResult result);
-    void stop(QString message, TaskState state = TaskState::Failed);
+    void stop(QString message, TaskState state = TaskState::Failed, bool canAdvance = false);
     [[nodiscard]] bool sourceUnchanged() const;
     QString loadContinuation(const QString& pipeline, bool allowLegacyEndpoint);
     std::unique_ptr<storage::ProjectDatabase> database_;
@@ -72,6 +75,7 @@ class ChapterAnalysisController final : public QObject {
     int role_ = 0;
     bool busy_ = false;
     bool completedSuccessfully_ = false;
+    bool canAdvanceChapter_ = false;
     bool cancelled_ = false;
     bool persisted_ = false;
     bool closing_ = false;

@@ -376,7 +376,13 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter_data() {
                             QStringLiteral("project-switch"),
                             QStringLiteral("close-before-queued-next"),
                             QStringLiteral("close-current-window"),
-                            QStringLiteral("budget-change")};
+                            QStringLiteral("budget-change"),
+                            QStringLiteral("checker-http-failure"),
+                            QStringLiteral("reviewer-http-failure"),
+                            QStringLiteral("invalid-review-output"),
+                            QStringLiteral("redo-verdict"),
+                            QStringLiteral("current-source-changed"),
+                            QStringLiteral("credential-reflection")};
     for (int mode = 0; mode < cases.size(); ++mode)
         QTest::newRow(qPrintable(cases[mode])) << mode;
 }
@@ -423,6 +429,7 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
         enable(mode != 9);
     QCOMPARE(server.requests.size(), 0);
     bool enabledWhileBusy = false;
+    bool sourceRewritten = false;
     server.makeOutput = [&](const QJsonObject& user, int index) -> QJsonObject {
         if (index == 0) {
             if (mode == 1)
@@ -444,8 +451,25 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
         }
         if (mode == 12 && index == 3)
             server.status = 500;
-        if (user.contains(QStringLiteral("analysis")))
-            return reviewFor(user, mode == 4 ? QStringLiteral("human") : QStringLiteral("pass"));
+        if (mode == 23 && index == 0)
+            sourceRewritten =
+                test::writeMarkdownFixtureFile(fixture.source.path(), QStringLiteral("02/010.md"),
+                                               QByteArray("# Changed\n\nNot the imported text.\n"));
+        if (mode == 24)
+            return QJsonObject{
+                {QStringLiteral("secret"), QStringLiteral("auto-chapter-fixture-key")}};
+        if (mode == 19 || mode == 20)
+            server.status =
+                user.contains(mode == 19 ? QStringLiteral("analysis") : QStringLiteral("checker"))
+                    ? 500
+                    : 200;
+        if (user.contains(QStringLiteral("analysis"))) {
+            if (mode == 21)
+                return QJsonObject{};
+            return reviewFor(user, mode == 4    ? QStringLiteral("human")
+                                   : mode == 22 ? QStringLiteral("redo")
+                                                : QStringLiteral("pass"));
+        }
         auto output = analysisFor(user);
         if (mode == 5) {
             auto parts = output.value(QStringLiteral("segments")).toArray();
@@ -484,31 +508,45 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
         .findChild<QPushButton*>(mode == 13 ? QStringLiteral("llmAnalyzeChapter")
                                             : QStringLiteral("dialogueSegmentChapter"))
         ->click();
-    const int expectedChapters = (mode == 0 || mode == 2 || mode == 13) ? 3 : mode == 12 ? 2 : 1;
+    const bool completesBook = mode == 0 || mode == 2 || mode == 3 || mode == 4 || mode == 5 ||
+                               mode == 12 || mode == 13 || (mode >= 19 && mode <= 22);
+    const int expectedChapters = completesBook ? 3 : 1;
     QTRY_COMPARE_WITH_TIMEOUT(finished.size(), expectedChapters, 10000);
     QTRY_VERIFY(!flag->isChecked());
     QVERIFY(!controller->busy());
     QTest::qWait(30);
-    const int expectedRequests = (mode == 0 || mode == 2 || mode == 13)   ? 9
-                                 : (mode == 3 || mode == 8 || mode == 17) ? 1
-                                 : mode == 12                             ? 4
-                                                                          : 3;
+    const int expectedRequests = mode == 3                                               ? 3
+                                 : mode == 12                                            ? 5
+                                 : (mode == 19 || mode == 21)                            ? 6
+                                 : completesBook                                         ? 9
+                                 : (mode == 8 || mode == 17 || mode == 23 || mode == 24) ? 1
+                                                                                         : 3;
     QCOMPARE(server.requests.size(), expectedRequests);
+    if (mode == 23)
+        QVERIFY(sourceRewritten);
     if (mode == 2)
         QVERIFY(enabledWhileBusy);
-    if (mode == 0 || mode == 2 || mode == 13 || mode == 14)
+    if (completesBook || mode == 14)
         QCOMPARE(selector->currentIndex(), 2);
-    if (mode == 7 || mode == 11 || mode == 12)
+    if (mode == 7 || mode == 11)
         QCOMPARE(selector->currentIndex(), 1);
     if (mode != 15) {
         const auto entries = history(fixture);
         QCOMPARE(entries.size(), expectedRequests);
+        const int expectedFailures = mode == 3 || mode == 19 || mode == 20 || mode == 21   ? 3
+                                     : mode == 12                                          ? 2
+                                     : mode == 8 || mode == 17 || mode == 23 || mode == 24 ? 1
+                                                                                           : 0;
+        int failures = 0;
         for (const auto& entry : entries) {
+            if (entry.run.status != storage::LLMRunStatus::Succeeded)
+                ++failures;
             const bool dialogue =
                 entry.context.content.value(QStringLiteral("task_kind")).toString() ==
                 QStringLiteral("dialogue");
             QCOMPARE(dialogue, mode != 13);
         }
+        QCOMPARE(failures, expectedFailures);
     }
     app::MainWindow reopened;
     QVERIFY(reopened.openProjectFile(fixture.path));

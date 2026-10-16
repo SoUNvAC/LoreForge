@@ -1034,9 +1034,9 @@ void MainWindow::stopAutoAnalysis() {
 void MainWindow::scheduleNextChapter() {
     if (!analysisWorkbench_->autoNextEnabled())
         return;
-    if (!analysisController_->completedSuccessfully()) {
+    if (!analysisController_->canAdvanceChapter()) {
         stopAutoAnalysis();
-        showStatusMessage(tr("自动续章已停止：本章失败、取消或需要确认；不会自动重试。"));
+        showStatusMessage(tr("自动续章已停止：任务取消或本地/安全检查未通过；请查看本章记录。"));
         return;
     }
     const auto context = activeAnalysis_;
@@ -1060,7 +1060,8 @@ void MainWindow::scheduleNextChapter() {
         }
         if (index + 1 >= book->chapters.size()) {
             stopAutoAnalysis();
-            analysisWorkbench_->showError(tr("本章三角色通过；已到末章，自动分析结束。"));
+            analysisWorkbench_->showError(
+                tr("已到末章，自动分析结束；失败和待确认结果保留在各章任务历史中。"));
             return;
         }
         {

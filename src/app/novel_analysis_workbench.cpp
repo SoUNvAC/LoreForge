@@ -116,8 +116,9 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     layout->addLayout(buttons);
     autoNext_ = new QCheckBox(tr("自动分析下一章"), this);
     autoNext_->setObjectName(QStringLiteral("analysisAutoNextChapter"));
-    autoNext_->setToolTip(tr("本章三角色通过后续跑下一章；取消勾选等本章完成后停。失败、需确认或到"
-                             "末章时停止，不自动重试。"));
+    autoNext_->setToolTip(
+        tr("本章流程结束后续跑下一章；角色失败或需确认会保留记录并继续。取消勾选等本章"
+           "结束后停；取消任务、本地/安全错误或到末章时停止，不自动重试。"));
     layout->addWidget(autoNext_);
     connect(autoNext_, &QCheckBox::toggled, this, [this](bool checked) {
         autoNextAuthorized_ = false;
@@ -125,15 +126,18 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
             emit autoNextChanged(false);
             return;
         }
-        QMessageBox dialog(QMessageBox::Question, tr("确认自动分析后续章节"),
-                           tr("开启后，当你启动或继续本章任务并完成三角色检查时，将自动切换到本书下"
-                              "一章，按同一任务类型继续。\n"
-                              "授权范围为当前工程、当前书籍的剩余章节，每章最多三次 API "
-                              "请求，后续章节不再逐章弹出发送确认。\n"
-                              "取消勾选不会打断本章，本章结束后停止；失败、需确认、到末章或手动切换"
-                              "章节/书籍/工程时停止。\n"
-                              "不会自动重试，不修改原文；勾选状态不跨会话保存。确认开启？"),
-                           QMessageBox::NoButton, this);
+        QMessageBox dialog(
+            QMessageBox::Question, tr("确认自动分析后续章节"),
+            tr("开启后，当你启动或继续本章任务且本章流程结束时，将自动切换到本书下"
+               "一章，按同一任务类型继续。\n"
+               "授权范围为当前工程、当前书籍的剩余章节，每章最多三次 API "
+               "请求，后续章节不再逐章弹出发送确认。\n"
+               "角色请求/"
+               "输出失败、建议重做或需确认会保留记录并继续下一章；失败后的依赖角色不运行。\n"
+               "取消勾选等本章结束后停；取消任务、本地/安全检查失败、到末章或手动切换"
+               "章节/书籍/工程时停止。\n"
+               "不会自动重试，不修改原文；勾选状态不跨会话保存。确认开启？"),
+            QMessageBox::NoButton, this);
         dialog.setObjectName(QStringLiteral("analysisAutoNextConfirmation"));
         auto* confirm = dialog.addButton(tr("确认"), QMessageBox::AcceptRole);
         confirm->setObjectName(QStringLiteral("analysisAutoNextConfirm"));
@@ -288,7 +292,7 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly)
     QMessageBox dialog(
         QMessageBox::Question, tr("确认发送本章"),
         tr("章节：%1\n%2\n\n").arg(chapters_->currentText(), connectionSummary_) +
-            (autoNextEnabled() ? tr("已开启自动分析下一章：本章三角色通过后，将按本次任务类型自动处"
+            (autoNextEnabled() ? tr("已开启自动分析下一章：本章流程结束后，将按本次任务类型自动处"
                                     "理本书余下章节，不再逐章确认。\n")
                                : QString{}) +
             (dialogueOnly_ ? tr("本次任务：独立人物与对白分割；不提取剧情、摘要或伏笔。\n")
