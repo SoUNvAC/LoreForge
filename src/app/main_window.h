@@ -62,6 +62,8 @@ class MainWindow final : public QMainWindow {
     void showLoadError(QString message);
     void reloadRepairQueue();
     void reloadAnalysisHistory();
+    void refreshChapterIndicators();
+    void showChapterDetails(QTreeWidgetItem* item, int column);
     void runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint);
     void stopAutoAnalysis();
     void scheduleNextChapter();

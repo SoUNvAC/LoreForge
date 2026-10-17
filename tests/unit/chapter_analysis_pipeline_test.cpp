@@ -102,7 +102,8 @@ QJsonObject analysisFor(const QJsonObject& user) {
                  QJsonArray{
                      QJsonObject{{QStringLiteral("name"), QStringLiteral("她")},
                                  {QStringLiteral("aliases"), QJsonArray{QStringLiteral("小晴")}}}}},
-                {QStringLiteral("segments"), segments}};
+                {QStringLiteral("segments"), segments},
+                {QStringLiteral("proofreading"), QJsonArray{}}};
     }
     const auto range = user.value(QStringLiteral("source_blocks")).toArray().at(1).toObject();
     const QJsonArray evidence{
@@ -351,6 +352,7 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void preservesPartialExtractionWithoutPretendingItFullyPassed();
     void automaticallyRunsNextChapter_data();
     void automaticallyRunsNextChapter();
+    void showsChapterIndicatorsAndPersistedProofreading();
 
   private:
     QTemporaryDir highlightSettings_;
@@ -548,10 +550,94 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
         }
         QCOMPARE(failures, expectedFailures);
     }
+    auto* chapterTree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    QCOMPARE(chapterTree->columnCount(), 6);
+    QCOMPARE(chapterTree->headerItem()->text(4), QStringLiteral("分析"));
+    QCOMPARE(chapterTree->headerItem()->text(5), QStringLiteral("错字"));
+    if (mode == 0 || mode == 2 || mode == 3 || mode == 4 || mode == 5 ||
+        (mode >= 19 && mode <= 22)) {
+        for (int i = 0; i < 3; ++i) {
+            auto* row = chapterTree->topLevelItem(i);
+            QVERIFY(!row->icon(4).isNull());
+            QCOMPARE(row->text(4),
+                     mode == 3 || mode == 19 || mode == 20 || mode == 21 ? QStringLiteral("失败")
+                     : mode == 4 || mode == 5 || mode == 22              ? QStringLiteral("待确认")
+                                                            : QStringLiteral("已分析"));
+            QCOMPARE(row->text(5), mode == 3 ? QStringLiteral("待检查") : QStringLiteral("未发现"));
+        }
+    }
     app::MainWindow reopened;
     QVERIFY(reopened.openProjectFile(fixture.path));
     QVERIFY(
         !reopened.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"))->isChecked());
+}
+
+void ChapterAnalysisPipelineTest::showsChapterIndicatorsAndPersistedProofreading() {
+    Fixture fixture;
+    QVERIFY(
+        fixture.initialize(QStringLiteral("# 校对测试\n\n她说：“这是错自。”\n").toUtf8(), true));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int index) {
+        if (index == 2)
+            return QJsonObject{}; // Failed reviewer must not hide analyst suggestions.
+        if (index == 1)
+            return reviewFor(user);
+        auto output = analysisFor(user);
+        for (const auto& value : user.value(QStringLiteral("source_units")).toArray()) {
+            const auto unit = value.toObject();
+            if (unit.value(QStringLiteral("text")).toString().contains(QStringLiteral("错自"))) {
+                output.insert(
+                    QStringLiteral("proofreading"),
+                    QJsonArray{QJsonObject{
+                        {QStringLiteral("unit_id"), unit.value(QStringLiteral("unit_id"))},
+                        {QStringLiteral("original"), QStringLiteral("错自")},
+                        {QStringLiteral("suggestion"), QStringLiteral("错字")},
+                        {QStringLiteral("reason"), QStringLiteral("疑似同音字误用")}}});
+            }
+        }
+        return output;
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        app::MainWindow window;
+        QVERIFY(window.openProjectFile(fixture.path));
+        auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+        QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("失败"));
+        QCOMPARE(tree->topLevelItem(0)->text(5), QStringLiteral("疑似 1 处"));
+        QCOMPARE(tree->topLevelItem(1)->text(4), QStringLiteral("未分析"));
+        QCOMPARE(tree->topLevelItem(1)->text(5), QStringLiteral("待检查"));
+        const auto imagePath = qEnvironmentVariable("LOREFORGE_CHAPTER_TREE_IMAGE");
+        if (!imagePath.isEmpty()) {
+            const auto font =
+                QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc"));
+            const auto families = QFontDatabase::applicationFontFamilies(font);
+            if (!families.isEmpty())
+                window.setFont(QFont(families.first(), 10));
+            window.resize(1500, 950);
+            window.show();
+            QTest::qWait(30);
+            QVERIFY(window.grab().save(imagePath + QStringLiteral("-tree.png")));
+        }
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("chapterProofreadingDialog"));
+            QVERIFY(dialog);
+            auto* source =
+                dialog->findChild<QPlainTextEdit*>(QStringLiteral("chapterProofreadingSource"));
+            QCOMPARE(source->textCursor().selectedText(), QStringLiteral("错自"));
+            QVERIFY(source->isReadOnly());
+            auto* issues =
+                dialog->findChild<QTreeWidget*>(QStringLiteral("chapterProofreadingIssues"));
+            QCOMPARE(issues->topLevelItem(0)->text(1), QStringLiteral("错字"));
+            if (!imagePath.isEmpty())
+                QVERIFY(dialog->grab().save(imagePath + QStringLiteral("-issues.png")));
+            dialog->reject();
+        });
+        tree->itemClicked(tree->topLevelItem(0), 5);
+    }
+    QCOMPARE(server.requests.size(), 3); // Viewing and reopening never sends novel text.
 }
 
 void ChapterAnalysisPipelineTest::preservesPartialExtractionWithoutPretendingItFullyPassed() {

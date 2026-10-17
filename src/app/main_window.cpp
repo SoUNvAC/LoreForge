@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "character_highlight_preview.h"
+#include "dialogue_segmentation.h"
 #include "stream_monitor_widget.h"
 
 #include "context_inspector.h"
@@ -15,6 +16,8 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QCryptographicHash>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QFile>
@@ -22,9 +25,12 @@
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPlainTextEdit>
 #include <QScopedValueRollback>
 #include <QScrollArea>
 #include <QSettings>
@@ -35,6 +41,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
+#include <QTextCursor>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -50,6 +57,18 @@ namespace {
 constexpr int kProjectIndexRole = Qt::UserRole;
 constexpr int kBookIndexRole = Qt::UserRole + 1;
 constexpr int kChapterIndexRole = Qt::UserRole + 2;
+constexpr int kChapterDetailsRole = Qt::UserRole + 3;
+
+QIcon chapterStatusIcon(const QColor& color) {
+    QPixmap pixmap(16, 16);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(color.darker(120));
+    painter.setBrush(color);
+    painter.drawEllipse(QRectF(3, 3, 10, 10));
+    return QIcon(pixmap);
+}
 
 QString navigationSettingsPath() {
     const auto overridePath = qEnvironmentVariable("LOREFORGE_NAVIGATION_SETTINGS");
@@ -184,7 +203,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     chapterTree_ = new QTreeWidget;
     chapterTree_->setObjectName(QStringLiteral("chapterTree"));
-    chapterTree_->setHeaderLabels({tr("Chapter"), tr("字数"), tr("汉字"), tr("Blocks")});
+    chapterTree_->setHeaderLabels(
+        {tr("Chapter"), tr("字数"), tr("汉字"), tr("Blocks"), tr("分析"), tr("错字")});
+    chapterTree_->headerItem()->setToolTip(
+        4, tr("独立对白分割的最新流程：绿=通过，灰=未分析，黄=未完成/"
+              "待确认，红=失败，蓝=运行中。点击查看角色详情。"));
+    chapterTree_->headerItem()->setToolTip(
+        5,
+        tr("独立对白分析附带的模型校对建议；未发现不代表保证无错字。点击查看原文、建议与原因。"));
     const auto countPolicy =
         tr("只统计正文，不含标题、标点、空白或符号。字数按字母和数字逐字符计；汉字仅计汉字。");
     chapterTree_->headerItem()->setToolTip(1, countPolicy);
@@ -193,7 +219,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     chapterTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     chapterTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     chapterTree_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    chapterTree_->setMinimumWidth(310);
+    chapterTree_->header()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    chapterTree_->header()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    chapterTree_->setMinimumWidth(410);
     splitter->addWidget(panel(tr("Chapter Tree"), chapterTree_, splitter));
 
     auto* details = new QWidget(metadataScroll);
@@ -291,6 +319,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(analysisController_, &ChapterAnalysisController::taskStatus, this,
             [this](TaskState state, const QString& text) {
                 taskIndicator_->report(analysisTaskId_, state, text);
+                if (analysisController_->busy())
+                    refreshChapterIndicators();
             });
     connect(analysisWorkbench_, &NovelAnalysisWorkbench::chapterPreviewRequested, this,
             &MainWindow::prepareChapterPreview);
@@ -419,6 +449,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(projectExplorer_, &QTreeWidget::currentItemChanged, this,
             &MainWindow::selectProjectItem);
     connect(chapterTree_, &QTreeWidget::currentItemChanged, this, &MainWindow::displayChapter);
+    connect(chapterTree_, &QTreeWidget::itemClicked, this, &MainWindow::showChapterDetails);
     showStatusMessage(tr("Ready"));
 }
 
@@ -1093,10 +1124,197 @@ void MainWindow::reloadAnalysisHistory() {
         openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id);
     if (const auto* error = std::get_if<storage::StorageError>(&history)) {
         analysisWorkbench_->showError(tr("历史读取失败：%1").arg(error->message));
+        for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
+            auto* chapter = chapterTree_->topLevelItem(row);
+            chapter->setText(4, tr("读取失败"));
+            chapter->setIcon(4, chapterStatusIcon(QColor(QStringLiteral("#c53535"))));
+            chapter->setText(5, tr("未知"));
+            chapter->setData(4, kChapterDetailsRole, QJsonObject{});
+        }
         return;
     }
+    // Read history once per refresh, not once for every chapter.
+    QHash<QString, QList<AnalysisHistoryEntry>> chapters;
+    for (const auto& entry : std::get<QList<AnalysisHistoryEntry>>(history)) {
+        if (entry.context.content.value(QStringLiteral("book_id")).toString() ==
+                book->id.toString() &&
+            entry.context.content.value(QStringLiteral("task_kind")).toString() ==
+                QStringLiteral("dialogue"))
+            chapters[entry.context.content.value(QStringLiteral("chapter_id")).toString()].append(
+                entry);
+    }
+    for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
+        auto* chapter = chapterTree_->topLevelItem(row);
+        const auto chapterIndex = chapter->data(0, kChapterIndexRole).toInt();
+        if (chapterIndex < 0 || chapterIndex >= book->chapters.size())
+            continue;
+        const auto entries = chapters.value(book->chapters[chapterIndex].id.toString());
+        QString state = tr("未分析"), color = QStringLiteral("#92979e");
+        QStringList details;
+        QJsonObject payload;
+        if (!entries.isEmpty()) {
+            const auto pipeline =
+                entries.last().context.content.value(QStringLiteral("pipeline_id")).toString();
+            const auto roles = latestPipelineRoles(entries, pipeline);
+            const auto prefix = completedRolePrefix(roles);
+            bool failed = false;
+            const QStringList names{tr("分析员"), tr("复核员"), tr("审查员")};
+            for (int role = 0; role < 3; ++role) {
+                const auto* entry = roles[role];
+                QString status = tr("尚未运行");
+                if (entry) {
+                    const bool valid = entry->run.status == storage::LLMRunStatus::Succeeded &&
+                                       entry->artifacts.validation.isValid() &&
+                                       entry->artifacts.parsedResponse.has_value();
+                    failed |= entry->run.status == storage::LLMRunStatus::Failed ||
+                              (entry->run.status == storage::LLMRunStatus::Succeeded && !valid);
+                    status = valid ? tr("输出校验通过")
+                             : entry->run.status == storage::LLMRunStatus::Failed ? tr("失败")
+                             : entry->run.status == storage::LLMRunStatus::Cancelled
+                                 ? tr("已取消")
+                                 : tr("未完成/可能中断");
+                    if (valid && role > 0)
+                        status += QStringLiteral(" · ") + entry->artifacts.parsedResponse->object()
+                                                              .value(QStringLiteral("verdict"))
+                                                              .toString();
+                    if (!entry->run.errorMessage.isEmpty())
+                        status += QStringLiteral("\n") + entry->run.errorMessage;
+                }
+                details.append(names[role] + QStringLiteral("：") + status);
+            }
+            state = failed ? tr("失败") : prefix == 3 ? tr("待确认") : tr("未完成");
+            color = failed ? QStringLiteral("#c53535") : QStringLiteral("#b98312");
+            if (prefix >= 1) {
+                const auto normalized =
+                    resolveDialogue(roles[0]->artifacts.parsedResponse->object(),
+                                    roles[0]->context.content)
+                        .output;
+                payload = normalized;
+                payload.insert(QStringLiteral("source"),
+                               roles[0]->context.content.value(QStringLiteral("source")));
+                if (prefix == 3 &&
+                    roles[1]->artifacts.parsedResponse->object()
+                            .value(QStringLiteral("verdict"))
+                            .toString() == QStringLiteral("pass") &&
+                    roles[2]->artifacts.parsedResponse->object()
+                            .value(QStringLiteral("verdict"))
+                            .toString() == QStringLiteral("pass") &&
+                    normalized.value(QStringLiteral("extraction_issues")).toArray().isEmpty() &&
+                    !normalized.isEmpty()) {
+                    state = tr("已分析");
+                    color = QStringLiteral("#26834b");
+                }
+            }
+        }
+        payload.insert(QStringLiteral("analysis_details"), details.join(QLatin1Char('\n')));
+        chapter->setData(4, kChapterDetailsRole, payload);
+        chapter->setText(4, state);
+        chapter->setIcon(4, chapterStatusIcon(QColor(color)));
+        chapter->setToolTip(4, tr("独立对白分割 · 最新流程（历史快照）\n%1\n%2")
+                                   .arg(state, details.join(QLatin1Char('\n'))));
+        const auto proofState = payload.value(QStringLiteral("proofreading_state")).toString();
+        const auto count = payload.value(QStringLiteral("proofreading")).toArray().size();
+        chapter->setText(5, count > 0                                 ? tr("疑似 %1 处").arg(count)
+                            : proofState == QStringLiteral("checked") ? tr("未发现")
+                            : proofState == QStringLiteral("invalid") ? tr("需核对")
+                                                                      : tr("待检查"));
+        chapter->setToolTip(
+            5, tr("%1。模型建议，不保证检出所有错字，不自动修改原文。点击查看快照及详情。%2")
+                   .arg(chapter->text(5), proofState == QStringLiteral("invalid")
+                                              ? tr("\n存在无法定位的校对条目，请人工核对。")
+                                              : QString{}));
+    }
+    refreshChapterIndicators();
     analysisWorkbench_->showHistory(std::get<QList<AnalysisHistoryEntry>>(history),
                                     book->chapters[index].id.toString());
+}
+
+void MainWindow::refreshChapterIndicators() {
+    if (!analysisController_->busy() ||
+        !activeAnalysis_.value(QStringLiteral("dialogue_only")).toBool())
+        return;
+    const auto* book = selectedBook();
+    if (!book ||
+        activeAnalysis_.value(QStringLiteral("database_path")).toString() != openedDatabasePath_ ||
+        activeAnalysis_.value(QStringLiteral("book_id")).toString() != book->id.toString())
+        return;
+    const auto index = activeAnalysis_.value(QStringLiteral("chapter_index")).toInt(-1);
+    if (index >= 0 && index < chapterTree_->topLevelItemCount()) {
+        auto* item = chapterTree_->topLevelItem(index);
+        item->setText(4, tr("运行中"));
+        item->setIcon(4, chapterStatusIcon(QColor(QStringLiteral("#287bca"))));
+        item->setToolTip(4, tr("正在运行独立对白分割；结束后刷新为最终状态。"));
+    }
+}
+
+void MainWindow::showChapterDetails(QTreeWidgetItem* item, int column) {
+    if (!item || (column != 4 && column != 5))
+        return;
+    const auto payload = item->data(4, kChapterDetailsRole).toJsonObject();
+    if (column == 4) {
+        QMessageBox::information(this, tr("章节分析状态"),
+                                 item->text(0) + QStringLiteral("\n") + item->toolTip(4));
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("chapterProofreadingDialog"));
+    dialog.setWindowTitle(tr("校对问题 — %1").arg(item->text(0)));
+    dialog.resize(850, 600);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* note = new QLabel(item->toolTip(5), &dialog);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+    auto* table = new QTreeWidget(&dialog);
+    table->setObjectName(QStringLiteral("chapterProofreadingIssues"));
+    table->setHeaderLabels({tr("原文"), tr("建议"), tr("原因")});
+    table->header()->setSectionResizeMode(QHeaderView::Stretch);
+    layout->addWidget(table);
+    auto* source = new QPlainTextEdit(&dialog);
+    source->setObjectName(QStringLiteral("chapterProofreadingSource"));
+    source->setReadOnly(true);
+    const auto snapshot = payload.value(QStringLiteral("source")).toObject();
+    const auto bytes = snapshot.value(QStringLiteral("utf8")).toString().toUtf8();
+    const auto base = snapshot.value(QStringLiteral("start_byte")).toInteger();
+    source->setPlainText(QString::fromUtf8(bytes));
+    source->setPlaceholderText(tr("此章尚无有效的校对快照，请运行新版独立对白分割。"));
+    layout->addWidget(
+        new QLabel(tr("只读原文快照（不是当前文件；选中问题定位，不自动修改）"), &dialog));
+    layout->addWidget(source, 1);
+    for (const auto& value : payload.value(QStringLiteral("proofreading")).toArray()) {
+        const auto issue = value.toObject();
+        auto* row =
+            new QTreeWidgetItem(table, {issue.value(QStringLiteral("original")).toString(),
+                                        issue.value(QStringLiteral("suggestion")).toString(),
+                                        issue.value(QStringLiteral("reason")).toString()});
+        row->setData(0, Qt::UserRole, issue);
+    }
+    connect(table, &QTreeWidget::currentItemChanged, source,
+            [source, bytes, base](QTreeWidgetItem* row, QTreeWidgetItem*) {
+                if (!row)
+                    return;
+                const auto issue = row->data(0, Qt::UserRole).toJsonObject();
+                const auto start = issue.value(QStringLiteral("source_start")).toInteger(-1) - base;
+                const auto end = issue.value(QStringLiteral("source_end")).toInteger(-1) - base;
+                if (start < 0 || end <= start || end > bytes.size())
+                    return;
+                const auto normalized = [](QByteArrayView value) {
+                    return QString::fromUtf8(value)
+                        .replace(QStringLiteral("\r\n"), QStringLiteral("\n"))
+                        .replace(QChar('\r'), QChar('\n'));
+                };
+                QTextCursor cursor(source->document());
+                cursor.setPosition(normalized(QByteArrayView(bytes).first(start)).size());
+                cursor.setPosition(normalized(QByteArrayView(bytes).first(end)).size(),
+                                   QTextCursor::KeepAnchor);
+                source->setTextCursor(cursor);
+                source->ensureCursorVisible();
+            });
+    if (table->topLevelItemCount() > 0)
+        table->setCurrentItem(table->topLevelItem(0));
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.exec();
 }
 
 void MainWindow::showLoadError(QString message) {

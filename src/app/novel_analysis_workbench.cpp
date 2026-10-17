@@ -295,8 +295,9 @@ void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly)
             (autoNextEnabled() ? tr("已开启自动分析下一章：本章流程结束后，将按本次任务类型自动处"
                                     "理本书余下章节，不再逐章确认。\n")
                                : QString{}) +
-            (dialogueOnly_ ? tr("本次任务：独立人物与对白分割；不提取剧情、摘要或伏笔。\n")
-                           : tr("本次任务：原综合分析流程。\n")) +
+            (dialogueOnly_
+                 ? tr("本次任务：独立人物与对白分割，附带疑似错字建议；不提取剧情、摘要或伏笔。\n")
+                 : tr("本次任务：原综合分析流程。\n")) +
             (continuing
                  ? tr("复用：%1\n即将运行：%2（最多 %3 "
                       "次新请求）。\n继续前会重新核验原文、配置及前序结果。\n")

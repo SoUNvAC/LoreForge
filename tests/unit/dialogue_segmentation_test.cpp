@@ -39,12 +39,59 @@ QJsonObject output(const QJsonObject& snap) {
                                 {QStringLiteral("aliases"), QJsonArray{}}},
                     QJsonObject{{QStringLiteral("name"), QStringLiteral("苏雨晴")},
                                 {QStringLiteral("aliases"), QJsonArray{QStringLiteral("小晴")}}}}},
-        {QStringLiteral("segments"), segments}};
+        {QStringLiteral("segments"), segments},
+        {QStringLiteral("proofreading"), QJsonArray{}}};
 }
 } // namespace
 class DialogueSegmentationTest : public QObject {
     Q_OBJECT
   private slots:
+    void validatesProofreadingWithoutChangingDialogue() {
+        const auto snap = snapshot();
+        auto wire = output(snap);
+        const auto units = snap.value(QStringLiteral("segmentation_units")).toArray();
+        QJsonObject unit;
+        for (const auto& value : units)
+            if (value.toObject()
+                    .value(QStringLiteral("text"))
+                    .toString()
+                    .contains(QStringLiteral("药"))) {
+                unit = value.toObject();
+                break;
+            }
+        QVERIFY(!unit.isEmpty());
+        const QJsonObject issue{
+            {QStringLiteral("unit_id"), unit.value(QStringLiteral("unit_id"))},
+            {QStringLiteral("original"), QStringLiteral("药")},
+            {QStringLiteral("suggestion"), QStringLiteral("藥")},
+            {QStringLiteral("reason"), QStringLiteral("测试定位，不表示真实错字")}};
+        wire.insert(QStringLiteral("proofreading"), QJsonArray{issue, issue});
+        const auto mapped = resolveDialogue(wire, snap);
+        QCOMPARE(mapped.output.value(QStringLiteral("proofreading_state")).toString(),
+                 QStringLiteral("checked"));
+        const auto issues = mapped.output.value(QStringLiteral("proofreading")).toArray();
+        QCOMPARE(issues.size(), 1);
+        const auto source = snap.value(QStringLiteral("source")).toObject();
+        const auto start = issues[0].toObject().value(QStringLiteral("source_start")).toInteger() -
+                           source.value(QStringLiteral("start_byte")).toInteger();
+        QCOMPARE(source.value(QStringLiteral("utf8")).toString().toUtf8().mid(start, 3),
+                 QStringLiteral("药").toUtf8());
+        auto bad = issue;
+        bad.insert(QStringLiteral("unit_id"), QStringLiteral("missing"));
+        wire.insert(QStringLiteral("proofreading"), QJsonArray{issue, bad});
+        const auto partial = resolveDialogue(wire, snap);
+        QVERIFY(partial.errors.isEmpty());
+        QCOMPARE(partial.output.value(QStringLiteral("proofreading_state")).toString(),
+                 QStringLiteral("invalid"));
+        QCOMPARE(partial.output.value(QStringLiteral("proofreading")).toArray().size(), 1);
+        QCOMPARE(partial.output.value(QStringLiteral("segments")),
+                 mapped.output.value(QStringLiteral("segments")));
+        wire.remove(QStringLiteral("proofreading"));
+        QCOMPARE(resolveDialogue(wire, snap)
+                     .output.value(QStringLiteral("proofreading_state"))
+                     .toString(),
+                 QStringLiteral("unchecked"));
+    }
     void skipsNarrationAndTrailingPunctuationWithoutLosingSource() {
         auto snap = snapshot();
         auto source = snap.value(QStringLiteral("source")).toObject();
