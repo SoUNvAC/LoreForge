@@ -901,7 +901,8 @@ void ChapterAnalysisController::stop(QString message, TaskState state, bool canA
 }
 
 storage::StorageResult<QList<AnalysisHistoryEntry>>
-ChapterAnalysisController::history(QStringView path, const core::ProjectId& projectId) {
+ChapterAnalysisController::history(QStringView path, const core::ProjectId& projectId,
+                                   QStringView chapterId, QHash<QString, QString>* runChapters) {
     auto opened = storage::ProjectDatabase::open(path);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
         return *error;
@@ -915,6 +916,11 @@ ChapterAnalysisController::history(QStringView path, const core::ProjectId& proj
     }
     QList<AnalysisHistoryEntry> entries;
     for (const auto& run : std::get<QList<storage::LLMRunRecord>>(listed)) {
+        // The index contains only identifiers, not novel snapshots or provider payloads.
+        // Known unrelated chapters never enter the expensive artifact/snapshot reader.
+        if (!chapterId.isEmpty() && runChapters && runChapters->contains(run.id.toString()) &&
+            runChapters->value(run.id.toString()) != chapterId)
+            continue;
         const auto inspected = repository.inspectRun(run.id);
         if (const auto* error = std::get_if<storage::StorageError>(&inspected)) {
             if (error->code == storage::StorageErrorCode::NotFound) {
@@ -923,8 +929,13 @@ ChapterAnalysisController::history(QStringView path, const core::ProjectId& proj
             return *error;
         }
         const auto& record = std::get<storage::StoredInferenceSnapshot>(inspected);
-        if (record.contextSnapshot.content.value(QStringLiteral("format")).toString() !=
-            QStringLiteral("loreforge-analysis-role-v1")) {
+        const auto storedChapter =
+            record.contextSnapshot.content.value(QStringLiteral("chapter_id")).toString();
+        if (runChapters)
+            runChapters->insert(run.id.toString(), storedChapter);
+        if ((!chapterId.isEmpty() && storedChapter != chapterId) ||
+            record.contextSnapshot.content.value(QStringLiteral("format")).toString() !=
+                QStringLiteral("loreforge-analysis-role-v1")) {
             continue;
         }
         const auto outcome = repository.findContextSnapshot(outcomeId(run.id));

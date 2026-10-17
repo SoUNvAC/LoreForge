@@ -28,7 +28,8 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showError(QString message);
     void setBusy(bool busy);
     void updateRole(int role, QString status, QString usage, qint64 latencyMs);
-    void showHistory(QList<AnalysisHistoryEntry> history, QString chapterId);
+    void showHistory(QList<AnalysisHistoryEntry> history, QString chapterId,
+                     std::optional<QPair<qint64, int>> projectUsage = std::nullopt);
     [[nodiscard]] const std::optional<ChapterPreview>& preview() const noexcept;
     void invalidatePreview();
     [[nodiscard]] bool autoNextEnabled() const;
@@ -58,6 +59,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void updateButtons();
     void confirmAndStart(bool continuing, bool dialogueOnly = false);
     bool dialogueOnly_ = false;
+    const document::Document* selectedBook_ = nullptr;
     QCheckBox* autoNext_ = nullptr;
     bool autoNextAuthorized_ = false;
     QPushButton* dialogue_ = nullptr;

@@ -6,6 +6,7 @@
 #include "loreforge/storage/project_database.h"
 #include "task_indicator.h"
 
+#include <QHash>
 #include <QObject>
 #include <QTimer>
 #include <array>
@@ -41,7 +42,8 @@ class ChapterAnalysisController final : public QObject {
                bool allowLegacyEndpoint = false);
     void cancel();
     [[nodiscard]] static storage::StorageResult<QList<AnalysisHistoryEntry>>
-    history(QStringView databasePath, const core::ProjectId& projectId);
+    history(QStringView databasePath, const core::ProjectId& projectId, QStringView chapterId = {},
+            QHash<QString, QString>* runChapters = nullptr);
 
   signals:
     void busyChanged(bool busy);

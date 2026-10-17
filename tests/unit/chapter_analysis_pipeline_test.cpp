@@ -23,6 +23,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTabWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -353,6 +355,7 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void automaticallyRunsNextChapter_data();
     void automaticallyRunsNextChapter();
     void showsChapterIndicatorsAndPersistedProofreading();
+    void switchesChaptersWithoutReloadingUnrelatedArtifacts();
 
   private:
     QTemporaryDir highlightSettings_;
@@ -570,6 +573,85 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
     QVERIFY(reopened.openProjectFile(fixture.path));
     QVERIFY(
         !reopened.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"))->isChecked());
+}
+
+void ChapterAnalysisPipelineTest::switchesChaptersWithoutReloadingUnrelatedArtifacts() {
+    Fixture fixture;
+    QVERIFY(fixture.initialize(test::markdownFixtureChapter(), true));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int) {
+        return user.contains(QStringLiteral("analysis")) ? reviewFor(user) : analysisFor(user);
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+    QTRY_COMPARE(finished.size(), 1);
+    {
+        auto opened = Database::open(fixture.path);
+        auto database = std::get<std::unique_ptr<Database>>(std::move(opened));
+        auto built = app::ChapterPreviewBuilder::build(fixture.projectId, fixture.book, 1, 32768,
+                                                       4096, true);
+        QVERIFY(std::holds_alternative<app::ChapterPreview>(built));
+        auto stored =
+            app::ChapterPreviewBuilder::store(*database, std::get<app::ChapterPreview>(built));
+        QVERIFY(std::holds_alternative<app::ChapterPreview>(stored));
+        controller.start(fixture.path, fixture.book, 1, std::get<app::ChapterPreview>(stored),
+                         server.connection());
+    }
+    QTRY_COMPARE(finished.size(), 2);
+    QHash<QString, QString> runChapters;
+    const auto all = Controller::history(fixture.path, fixture.projectId, {}, &runChapters);
+    QVERIFY(std::holds_alternative<QList<app::AnalysisHistoryEntry>>(all));
+    QCOMPARE(runChapters.size(), 6);
+    const auto entries = std::get<QList<app::AnalysisHistoryEntry>>(all);
+    app::MainWindow window;
+    QVERIFY(window.openProjectFile(fixture.path));
+    auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    auto* taskStatus = window.findChild<QLabel*>(QStringLiteral("analysisTaskStatus"));
+    auto* totals = window.findChild<QLabel*>(QStringLiteral("analysisTokenTotals"));
+    const auto expectedTotals = totals->text();
+    QVERIFY(expectedTotals.contains(QStringLiteral("项目已知 84 token")));
+    const auto connectionName = QUuid::createUuid().toString();
+    {
+        auto sql = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        sql.setDatabaseName(fixture.path);
+        QVERIFY(sql.open());
+        QSqlQuery query(sql);
+        const auto corrupt = [&](const QString& id) {
+            query.prepare(QStringLiteral(
+                "UPDATE llm_run_artifacts SET parsed_response_json='invalid' WHERE run_id=?"));
+            query.addBindValue(id);
+            return query.exec();
+        };
+        // Simulate a broken unrelated artifact AFTER the initial validated cache is built.
+        QVERIFY(corrupt(entries.first().run.id.toString()));
+        const auto chapter = fixture.book.chapters[1].id.toString();
+        const auto selected =
+            Controller::history(fixture.path, fixture.projectId, chapter, &runChapters);
+        QVERIFY(std::holds_alternative<QList<app::AnalysisHistoryEntry>>(selected));
+        QCOMPARE(std::get<QList<app::AnalysisHistoryEntry>>(selected).size(), 3);
+        QVERIFY(std::holds_alternative<storage::StorageError>(
+            Controller::history(fixture.path, fixture.projectId)));
+        selector->setCurrentIndex(1); // First visit: only chapter 2 artifacts may be loaded.
+        QVERIFY(taskStatus->text().contains(QStringLiteral("通过")));
+        QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("已分析"));
+        QCOMPARE(totals->text(), expectedTotals);
+        QVERIFY(corrupt(entries.last().run.id.toString()));
+        QElapsedTimer elapsed;
+        elapsed.start();
+        for (int i = 0; i < 10; ++i) {
+            selector->setCurrentIndex(0);
+            selector->setCurrentIndex(1); // Warm chapter history must not be re-read either.
+            QVERIFY(taskStatus->text().contains(QStringLiteral("通过")));
+        }
+        qInfo() << "20 cached chapter switches, ms:" << elapsed.elapsed();
+        QCOMPARE(totals->text(), expectedTotals);
+        QVERIFY(window.openProjectFile(fixture.path)); // Reopening invalidates every cache.
+        QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("读取失败"));
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    QCOMPARE(server.requests.size(), 6);
 }
 
 void ChapterAnalysisPipelineTest::showsChapterIndicatorsAndPersistedProofreading() {

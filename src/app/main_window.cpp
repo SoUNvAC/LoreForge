@@ -370,15 +370,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         .arg(status, usage)
                         .arg(latency));
             });
-    connect(
-        analysisController_, &ChapterAnalysisController::roleChanged, this,
-        [this](int role, const QString& status, const QString&, qint64) {
-            if (role == 0 && status.startsWith(QStringLiteral("输出校验通过")))
-                reloadAnalysisHistory(); // Show candidate evidence while later roles are running.
-        });
+    connect(analysisController_, &ChapterAnalysisController::roleChanged, this,
+            [this](int role, const QString& status, const QString&, qint64) {
+                if (role == 0 && status.startsWith(QStringLiteral("输出校验通过")))
+                    reloadAnalysisHistory(
+                        true); // Refresh only this chapter after a persisted result.
+            });
     connect(analysisController_, &ChapterAnalysisController::finished, this,
             [this](QString status) {
-                reloadAnalysisHistory();
+                // Cancellation can finish after the selection has changed. Refresh the old row too.
+                const auto* book = selectedBook();
+                const auto* item = chapterTree_->currentItem();
+                if (!book || !item ||
+                    book->id.toString() !=
+                        activeAnalysis_.value(QStringLiteral("book_id")).toString() ||
+                    item->data(0, kChapterIndexRole).toLongLong() !=
+                        activeAnalysis_.value(QStringLiteral("chapter_index")).toInteger(-1))
+                    clearAnalysisHistoryCache();
+                reloadAnalysisHistory(true);
                 analysisWorkbench_->showError(std::move(status));
                 scheduleNextChapter();
             });
@@ -833,6 +842,7 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
         clearBookView();
         return;
     }
+    clearAnalysisHistoryCache();
     selectedProjectIndex_ = projectIndex;
     selectedBookIndex_ = bookIndex;
     const auto& book = workspace_->projects.at(projectIndex).books.at(bookIndex);
@@ -943,6 +953,7 @@ void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previ
 void MainWindow::clearBookView() {
     stopAutoAnalysis();
     analysisController_->cancel();
+    clearAnalysisHistoryCache();
     analysisWorkbench_->setSelectedBook(nullptr, -1);
     llmWorkbench_->showAnalysisMetrics(tr("小说任务统计：尚未选择项目。"));
     selectedProjectIndex_ = -1;
@@ -1110,7 +1121,16 @@ void MainWindow::scheduleNextChapter() {
     });
 }
 
-void MainWindow::reloadAnalysisHistory() {
+void MainWindow::clearAnalysisHistoryCache() {
+    analysisHistoryIndexed_ = false;
+    analysisRunChapters_.clear();
+    analysisChapterHistory_.clear();
+    analysisHistoryLru_.clear();
+    analysisChapterUsage_.clear();
+    analysisProjectUsage_ = {};
+}
+
+void MainWindow::reloadAnalysisHistory(bool refresh) {
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || openedDatabasePath_.isEmpty()) {
@@ -1120,9 +1140,20 @@ void MainWindow::reloadAnalysisHistory() {
     if (index < 0 || index >= book->chapters.size()) {
         return;
     }
+    const auto chapterId = book->chapters[index].id.toString();
+    if (analysisHistoryIndexed_ && !refresh && analysisChapterHistory_.contains(chapterId)) {
+        analysisHistoryLru_.removeAll(chapterId);
+        analysisHistoryLru_.append(chapterId);
+        analysisWorkbench_->showHistory(analysisChapterHistory_.value(chapterId), chapterId,
+                                        analysisProjectUsage_);
+        return;
+    }
+    const bool initialLoad = !analysisHistoryIndexed_;
     const auto history = ChapterAnalysisController::history(
-        openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id);
+        openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id,
+        initialLoad ? QStringView{} : QStringView(chapterId), &analysisRunChapters_);
     if (const auto* error = std::get_if<storage::StorageError>(&history)) {
+        clearAnalysisHistoryCache();
         analysisWorkbench_->showError(tr("历史读取失败：%1").arg(error->message));
         for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
             auto* chapter = chapterTree_->topLevelItem(row);
@@ -1133,9 +1164,43 @@ void MainWindow::reloadAnalysisHistory() {
         }
         return;
     }
-    // Read history once per refresh, not once for every chapter.
+    const auto& loaded = std::get<QList<AnalysisHistoryEntry>>(history);
+    QList<AnalysisHistoryEntry> currentHistory;
+    QHash<QString, QPair<qint64, int>> usage;
+    for (const auto& entry : loaded) {
+        const auto id = entry.context.content.value(QStringLiteral("chapter_id")).toString();
+        if (entry.outcome.value(QStringLiteral("usage_known")).toBool())
+            usage[id].first += entry.run.totalTokens;
+        else
+            ++usage[id].second;
+        if (id == chapterId)
+            currentHistory.append(entry);
+    }
+    if (initialLoad) {
+        analysisChapterUsage_ = usage;
+        analysisProjectUsage_ = {};
+        for (const auto& value : usage) {
+            analysisProjectUsage_.first += value.first;
+            analysisProjectUsage_.second += value.second;
+        }
+    } else {
+        const auto previous = analysisChapterUsage_.value(chapterId);
+        const auto current = usage.value(chapterId);
+        analysisProjectUsage_.first += current.first - previous.first;
+        analysisProjectUsage_.second += current.second - previous.second;
+        analysisChapterUsage_[chapterId] = current;
+    }
+    analysisChapterHistory_[chapterId] = currentHistory;
+    analysisHistoryLru_.removeAll(chapterId);
+    analysisHistoryLru_.append(chapterId);
+    // Bound full histories: keep four recently visited chapters, not the entire novel's requests.
+    while (analysisHistoryLru_.size() > 4)
+        analysisChapterHistory_.remove(analysisHistoryLru_.takeFirst());
+    analysisHistoryIndexed_ = true;
+
+    // Populate the whole tree only once; newly saved results update just their chapter.
     QHash<QString, QList<AnalysisHistoryEntry>> chapters;
-    for (const auto& entry : std::get<QList<AnalysisHistoryEntry>>(history)) {
+    for (const auto& entry : loaded) {
         if (entry.context.content.value(QStringLiteral("book_id")).toString() ==
                 book->id.toString() &&
             entry.context.content.value(QStringLiteral("task_kind")).toString() ==
@@ -1147,6 +1212,8 @@ void MainWindow::reloadAnalysisHistory() {
         auto* chapter = chapterTree_->topLevelItem(row);
         const auto chapterIndex = chapter->data(0, kChapterIndexRole).toInt();
         if (chapterIndex < 0 || chapterIndex >= book->chapters.size())
+            continue;
+        if (!initialLoad && chapterIndex != index)
             continue;
         const auto entries = chapters.value(book->chapters[chapterIndex].id.toString());
         QString state = tr("未分析"), color = QStringLiteral("#92979e");
@@ -1185,11 +1252,15 @@ void MainWindow::reloadAnalysisHistory() {
             state = failed ? tr("失败") : prefix == 3 ? tr("待确认") : tr("未完成");
             color = failed ? QStringLiteral("#c53535") : QStringLiteral("#b98312");
             if (prefix >= 1) {
-                const auto normalized =
-                    resolveDialogue(roles[0]->artifacts.parsedResponse->object(),
-                                    roles[0]->context.content)
-                        .output;
+                auto normalized =
+                    roles[0]->outcome.value(QStringLiteral("normalized_output")).toObject();
+                if (normalized.isEmpty())
+                    normalized = resolveDialogue(roles[0]->artifacts.parsedResponse->object(),
+                                                 roles[0]->context.content)
+                                     .output;
                 payload = normalized;
+                payload.remove(QStringLiteral("segments"));
+                payload.remove(QStringLiteral("characters"));
                 payload.insert(QStringLiteral("source"),
                                roles[0]->context.content.value(QStringLiteral("source")));
                 if (prefix == 3 &&
@@ -1225,8 +1296,7 @@ void MainWindow::reloadAnalysisHistory() {
                                               : QString{}));
     }
     refreshChapterIndicators();
-    analysisWorkbench_->showHistory(std::get<QList<AnalysisHistoryEntry>>(history),
-                                    book->chapters[index].id.toString());
+    analysisWorkbench_->showHistory(currentHistory, chapterId, analysisProjectUsage_);
 }
 
 void MainWindow::refreshChapterIndicators() {

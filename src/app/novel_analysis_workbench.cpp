@@ -38,7 +38,7 @@ QJsonObject evidenceOutput(const AnalysisHistoryEntry& entry, QStringList* error
     if (entry.artifacts.outputSchemaVersion == 1)
         return output; // Historical byte-range contracts remain read-only and renderable.
     if (entry.artifacts.outputSchemaVersion != 2 && entry.artifacts.outputSchemaVersion != 3 &&
-        entry.artifacts.outputSchemaVersion != 4 &&
+        entry.artifacts.outputSchemaVersion != 4 && entry.artifacts.outputSchemaVersion != 5 &&
         entry.artifacts.outputSchemaVersion != chapterWireSchemaVersion)
         return {};
     const auto resolved = resolveChapterEvidence(
@@ -364,15 +364,19 @@ void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsi
     resumePipeline_.clear();
     resumePrefix_ = 0;
     const QSignalBlocker blocker(chapters_);
-    chapters_->clear();
+    const bool bookChanged =
+        selectedBook_ != book || (book && chapters_->count() != book->chapters.size());
+    selectedBook_ = book;
+    if (bookChanged || !book)
+        chapters_->clear();
     chapterId_.clear();
     bookId_ = book ? book->id.toString() : QString{};
     QStringList importedText;
     available_ = false;
     if (book) {
-        for (const auto& chapter : book->chapters) {
-            chapters_->addItem(chapter.title);
-        }
+        if (bookChanged)
+            for (const auto& chapter : book->chapters)
+                chapters_->addItem(chapter.title);
         chapters_->setCurrentIndex(static_cast<int>(index));
         if (index >= 0 && index < book->chapters.size()) {
             chapterId_ = book->chapters[index].id.toString();
@@ -469,7 +473,8 @@ const std::optional<ChapterPreview>& NovelAnalysisWorkbench::preview() const noe
     return preview_;
 }
 
-void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QString chapterId) {
+void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QString chapterId,
+                                         std::optional<QPair<qint64, int>> projectUsage) {
     resumePipeline_.clear();
     resumePrefix_ = 0;
     updateButtons();
@@ -517,8 +522,8 @@ void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QS
         tr("小说任务（持久化，含失败/重复运行，不含连接测试）：\n"
            "项目已知 %1 token · %2 次用量未知；本章已知 %3 token · %4 次用量未知。\n"
            "精确生成速度：未提供；SSE 接收状态见底部，各角色显示真实响应耗时。")
-            .arg(projectTokens)
-            .arg(projectUnknown)
+            .arg(projectUsage ? projectUsage->first : projectTokens)
+            .arg(projectUsage ? projectUsage->second : projectUnknown)
             .arg(chapterTokens)
             .arg(chapterUnknown);
     totals_->setText(summary);

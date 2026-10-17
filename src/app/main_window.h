@@ -1,5 +1,6 @@
 #pragma once
 
+#include "chapter_analysis_controller.h"
 #include "project_workspace.h"
 #include <QUuid>
 
@@ -61,7 +62,8 @@ class MainWindow final : public QMainWindow {
     void showBook(qsizetype projectIndex, qsizetype bookIndex);
     void showLoadError(QString message);
     void reloadRepairQueue();
-    void reloadAnalysisHistory();
+    void reloadAnalysisHistory(bool refresh = false);
+    void clearAnalysisHistoryCache();
     void refreshChapterIndicators();
     void showChapterDetails(QTreeWidgetItem* item, int column);
     void runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint);
@@ -95,6 +97,12 @@ class MainWindow final : public QMainWindow {
     QJsonObject activeAnalysis_;
     quint64 autoNextGeneration_ = 0;
     bool advancingAutomatically_ = false;
+    bool analysisHistoryIndexed_ = false;
+    QHash<QString, QString> analysisRunChapters_;
+    QHash<QString, QList<AnalysisHistoryEntry>> analysisChapterHistory_;
+    QStringList analysisHistoryLru_;
+    QHash<QString, QPair<qint64, int>> analysisChapterUsage_;
+    QPair<qint64, int> analysisProjectUsage_{};
 };
 
 } // namespace loreforge::app
