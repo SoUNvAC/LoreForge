@@ -256,7 +256,7 @@ bool LlmWorkbench::setProject(QString path, core::ProjectId id) {
     QJsonObject value;
     bool loaded = true;
     if (!projectPath_.isEmpty()) {
-        auto opened = storage::ProjectDatabase::open(projectPath_);
+        auto opened = storage::ProjectDatabase::openForSession(projectPath_);
         if (auto* database = std::get_if<std::unique_ptr<storage::ProjectDatabase>>(&opened)) {
             storage::ProjectRepository repository(**database);
             auto settings = repository.apiSettings(id);
@@ -368,7 +368,7 @@ void LlmWorkbench::saveConfiguration() {
         {QStringLiteral("test_output_tokens"), outputBudget_->value()},
         {QStringLiteral("analysis_context_tokens"), analysisMaximum_},
         {QStringLiteral("analysis_output_tokens"), analysisReserved_}};
-    auto opened = storage::ProjectDatabase::open(projectPath_);
+    auto opened = storage::ProjectDatabase::openForSession(projectPath_);
     bool saved = false;
     if (auto* database = std::get_if<std::unique_ptr<storage::ProjectDatabase>>(&opened)) {
         storage::ProjectRepository repository(**database);

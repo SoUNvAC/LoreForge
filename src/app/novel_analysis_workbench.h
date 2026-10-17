@@ -27,6 +27,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void showChapterPreview(const ChapterPreview& preview);
     void showError(QString message);
     void setBusy(bool busy);
+    void setHistoryLoading(bool loading);
     void updateRole(int role, QString status, QString usage, qint64 latencyMs);
     void showHistory(QList<AnalysisHistoryEntry> history, QString chapterId,
                      std::optional<QPair<qint64, int>> projectUsage = std::nullopt);
@@ -59,6 +60,7 @@ class NovelAnalysisWorkbench final : public QWidget {
     void updateButtons();
     void confirmAndStart(bool continuing, bool dialogueOnly = false);
     bool dialogueOnly_ = false;
+    bool historyLoading_ = false;
     const document::Document* selectedBook_ = nullptr;
     QCheckBox* autoNext_ = nullptr;
     bool autoNextAuthorized_ = false;

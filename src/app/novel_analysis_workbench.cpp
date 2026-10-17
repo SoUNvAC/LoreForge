@@ -122,6 +122,11 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
     layout->addWidget(autoNext_);
     connect(autoNext_, &QCheckBox::toggled, this, [this](bool checked) {
         autoNextAuthorized_ = false;
+        if (checked && historyLoading_) {
+            const QSignalBlocker blocker(autoNext_);
+            autoNext_->setChecked(false);
+            return;
+        }
         if (!checked) {
             emit autoNextChanged(false);
             return;
@@ -268,6 +273,10 @@ NovelAnalysisWorkbench::NovelAnalysisWorkbench(QWidget* parent) : QWidget(parent
 }
 
 void NovelAnalysisWorkbench::confirmAndStart(bool continuing, bool dialogueOnly) {
+    if (historyLoading_) {
+        showError(tr("工程/历史仍在后台加载，完成后才能分析。"));
+        return;
+    }
     if (busy_ || !available_) {
         return;
     }
@@ -348,17 +357,25 @@ bool NovelAnalysisWorkbench::prepareAutomaticChapter(bool dialogueOnly, int maxi
 }
 
 void NovelAnalysisWorkbench::updateButtons() {
-    prepare_->setEnabled(available_ && !busy_);
-    analyze_->setEnabled(available_ && !busy_);
-    dialogue_->setEnabled(available_ && !busy_);
-    autoNext_->setEnabled(available_ || busy_);
+    prepare_->setEnabled(available_ && !busy_ && !historyLoading_);
+    analyze_->setEnabled(available_ && !busy_ && !historyLoading_);
+    dialogue_->setEnabled(available_ && !busy_ && !historyLoading_);
+    autoNext_->setEnabled((available_ || busy_) && !historyLoading_);
     resume_->setVisible(resumePrefix_ == 1 || resumePrefix_ == 2);
-    resume_->setEnabled(available_ && !busy_ && (resumePrefix_ == 1 || resumePrefix_ == 2));
+    resume_->setEnabled(available_ && !busy_ && !historyLoading_ &&
+                        (resumePrefix_ == 1 || resumePrefix_ == 2));
     resume_->setText(resumePrefix_ == 2 ? tr("继续审查") : tr("继续复核与审查"));
     cancel_->setEnabled(busy_);
     chapters_->setEnabled(!busy_);
     contextLimit_->setEnabled(!busy_);
     outputBudget_->setEnabled(!busy_);
+}
+void NovelAnalysisWorkbench::setHistoryLoading(bool loading) {
+    historyLoading_ = loading;
+    updateButtons();
+    if (loading)
+        taskStatus_->setText(
+            tr("正在后台加载工程/分析历史，可先阅读；完成后恢复分析操作，不会自动发送。"));
 }
 void NovelAnalysisWorkbench::setSelectedBook(const document::Document* book, qsizetype index) {
     resumePipeline_.clear();

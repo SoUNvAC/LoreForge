@@ -3,6 +3,7 @@
 #include "loreforge/storage/book_repository.h"
 #include "loreforge/storage/project_database.h"
 
+#include <QThread>
 #include <utility>
 
 namespace loreforge::app {
@@ -24,6 +25,11 @@ WorkspaceLoadResult ProjectWorkspaceLoader::load(storage::ProjectDatabase& datab
 
         StoredProject storedProject{std::move(project), {}};
         for (const auto& bookId : std::get<QList<core::BookId>>(bookIdsResult)) {
+            if (QThread::currentThread()->isInterruptionRequested())
+                return storage::StorageError{storage::StorageErrorCode::Conflict,
+                                             QStringLiteral("工程加载已取消。"),
+                                             {},
+                                             true};
             auto documentResult = bookRepository.loadDocument(bookId);
             if (std::holds_alternative<storage::StorageError>(documentResult)) {
                 return std::get<storage::StorageError>(std::move(documentResult));

@@ -422,34 +422,35 @@ StorageStatus applyApiSettingsMigration(QSqlDatabase& database) {
     return std::nullopt;
 }
 
-StorageStatus verifySchema(QSqlDatabase& database) {
-    QSqlQuery integrity(database);
-    if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
-        return sqlError(StorageErrorCode::CorruptDatabase,
-                        QStringLiteral("The project database integrity check failed."),
-                        integrity.lastError());
-    }
-    if (integrity.value(0).toString() != QStringLiteral("ok")) {
-        return makeError(StorageErrorCode::CorruptDatabase,
-                         QStringLiteral("The project database is damaged."),
-                         integrity.value(0).toString(), false);
-    }
+StorageStatus verifySchema(QSqlDatabase& database, bool fullAudit) {
+    if (fullAudit) {
+        QSqlQuery integrity(database);
+        if (!integrity.exec(QStringLiteral("PRAGMA quick_check")) || !integrity.next()) {
+            return sqlError(StorageErrorCode::CorruptDatabase,
+                            QStringLiteral("The project database integrity check failed."),
+                            integrity.lastError());
+        }
+        if (integrity.value(0).toString() != QStringLiteral("ok")) {
+            return makeError(StorageErrorCode::CorruptDatabase,
+                             QStringLiteral("The project database is damaged."),
+                             integrity.value(0).toString(), false);
+        }
 
-    QSqlQuery foreignKeyCheck(database);
-    if (!foreignKeyCheck.exec(QStringLiteral("PRAGMA foreign_key_check"))) {
-        return sqlError(StorageErrorCode::CorruptDatabase,
-                        QStringLiteral("The project relationships could not be verified."),
-                        foreignKeyCheck.lastError());
+        QSqlQuery foreignKeyCheck(database);
+        if (!foreignKeyCheck.exec(QStringLiteral("PRAGMA foreign_key_check"))) {
+            return sqlError(StorageErrorCode::CorruptDatabase,
+                            QStringLiteral("The project relationships could not be verified."),
+                            foreignKeyCheck.lastError());
+        }
+        if (foreignKeyCheck.next()) {
+            return makeError(
+                StorageErrorCode::CorruptDatabase,
+                QStringLiteral("The project database contains broken relationships."),
+                QStringLiteral("Table %1 contains a broken reference at row %2.")
+                    .arg(foreignKeyCheck.value(0).toString(), foreignKeyCheck.value(1).toString()),
+                false);
+        }
     }
-    if (foreignKeyCheck.next()) {
-        return makeError(
-            StorageErrorCode::CorruptDatabase,
-            QStringLiteral("The project database contains broken relationships."),
-            QStringLiteral("Table %1 contains a broken reference at row %2.")
-                .arg(foreignKeyCheck.value(0).toString(), foreignKeyCheck.value(1).toString()),
-            false);
-    }
-
     QSqlQuery foreignKeys(database);
     if (!foreignKeys.exec(QStringLiteral("PRAGMA foreign_keys")) || !foreignKeys.next() ||
         foreignKeys.value(0).toInt() != 1) {
@@ -685,7 +686,7 @@ StorageStatus verifySchema(QSqlDatabase& database) {
     return std::nullopt;
 }
 
-StorageResult<int> migrate(QSqlDatabase& database) {
+StorageResult<int> migrate(QSqlDatabase& database, bool fullAudit) {
     if (const auto status = executeSql(
             database, QStringLiteral("PRAGMA foreign_keys = ON"), StorageErrorCode::CannotOpen,
             QStringLiteral("Could not enable SQLite foreign-key enforcement."));
@@ -709,6 +710,7 @@ StorageResult<int> migrate(QSqlDatabase& database) {
         return std::get<StorageError>(recorded);
     }
     auto version = std::get<int>(recorded);
+    const bool migrated = version < latestSchemaVersion;
     if (version > latestSchemaVersion) {
         return makeError(StorageErrorCode::UnsupportedSchema,
                          QStringLiteral("This project uses a newer database schema."),
@@ -774,7 +776,7 @@ StorageResult<int> migrate(QSqlDatabase& database) {
                              .arg(sqliteVersion),
                          false);
     }
-    if (const auto status = verifySchema(database); status.has_value()) {
+    if (const auto status = verifySchema(database, fullAudit || migrated); status.has_value()) {
         return *status;
     }
     return latestSchemaVersion;
@@ -783,7 +785,7 @@ StorageResult<int> migrate(QSqlDatabase& database) {
 } // namespace
 
 StorageResult<std::unique_ptr<ProjectDatabase>>
-ProjectDatabase::openDatabase(QStringView requestedPath, bool createNew) {
+ProjectDatabase::openDatabase(QStringView requestedPath, bool createNew, bool fullAudit) {
     const auto trimmedPath = requestedPath.trimmed().toString();
     if (trimmedPath.isEmpty()) {
         return makeError(StorageErrorCode::InvalidPath,
@@ -819,7 +821,7 @@ ProjectDatabase::openDatabase(QStringView requestedPath, bool createNew) {
             return openError;
         }
 
-        const auto migrationResult = migrate(database);
+        const auto migrationResult = migrate(database, fullAudit);
         if (std::holds_alternative<StorageError>(migrationResult)) {
             const auto migrationError = std::get<StorageError>(migrationResult);
             database.close();
@@ -839,6 +841,11 @@ StorageResult<std::unique_ptr<ProjectDatabase>> ProjectDatabase::create(QStringV
 
 StorageResult<std::unique_ptr<ProjectDatabase>> ProjectDatabase::open(QStringView filePath) {
     return openDatabase(filePath, false);
+}
+
+StorageResult<std::unique_ptr<ProjectDatabase>>
+ProjectDatabase::openForSession(QStringView filePath) {
+    return openDatabase(filePath, false, false);
 }
 
 ProjectDatabase::ProjectDatabase(QString filePath, QString connectionName, int schemaVersion)

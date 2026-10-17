@@ -16,6 +16,7 @@
 class QLabel;
 class QCloseEvent;
 class QTimer;
+class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QTextBrowser;
@@ -37,6 +38,13 @@ class MainWindow final : public QMainWindow {
     ~MainWindow() override;
 
     [[nodiscard]] bool openProjectFile(QStringView filePath);
+    [[nodiscard]] bool openProjectFileAsync(QStringView filePath);
+    [[nodiscard]] bool projectOpening() const noexcept {
+        return projectLoader_ != nullptr;
+    }
+    [[nodiscard]] bool analysisHistoryLoading() const noexcept {
+        return historyLoader_ != nullptr;
+    }
     [[nodiscard]] bool importMarkdownSource(QStringView sourcePath, QStringView projectPath);
     void inspectContext(const context::ContextInspectorData& context);
     void inspectRepairQueue(QList<proofreading::RepairQueueItem> items);
@@ -64,6 +72,10 @@ class MainWindow final : public QMainWindow {
     void reloadRepairQueue();
     void reloadAnalysisHistory(bool refresh = false);
     void clearAnalysisHistoryCache();
+    void trackBackgroundLoader(QThread* loader);
+    void cancelProjectOpen();
+    void updateLoadingControls();
+    void startHistoryLoad();
     void refreshChapterIndicators();
     void showChapterDetails(QTreeWidgetItem* item, int column);
     void runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint);
@@ -103,6 +115,14 @@ class MainWindow final : public QMainWindow {
     QStringList analysisHistoryLru_;
     QHash<QString, QPair<qint64, int>> analysisChapterUsage_;
     QPair<qint64, int> analysisProjectUsage_{};
+    QThread* projectLoader_ = nullptr;
+    bool closing_ = false;
+    QThread* historyLoader_ = nullptr;
+    QList<QThread*> backgroundLoaders_;
+    quint64 projectLoadGeneration_ = 0;
+    quint64 historyLoadGeneration_ = 0;
+    QUuid projectLoadTaskId_;
+    std::optional<storage::StorageResult<QList<AnalysisHistoryEntry>>> readyHistory_;
 };
 
 } // namespace loreforge::app

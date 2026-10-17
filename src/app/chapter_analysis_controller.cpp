@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QPointer>
 #include <QStringDecoder>
+#include <QThread>
 #include <QTimer>
 
 namespace loreforge::app {
@@ -187,7 +188,7 @@ void ChapterAnalysisController::start(QString path, document::Document book, qsi
         emit finished(QStringLiteral("分析必须使用 json_object 或 json_schema；未发送。"));
         return;
     }
-    auto opened = storage::ProjectDatabase::open(path);
+    auto opened = storage::ProjectDatabase::openForSession(path);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
         emit taskStatus(TaskState::Failed, QStringLiteral("项目无法打开：") + error->message);
         emit finished(QStringLiteral("项目无法打开：") + error->message);
@@ -903,7 +904,7 @@ void ChapterAnalysisController::stop(QString message, TaskState state, bool canA
 storage::StorageResult<QList<AnalysisHistoryEntry>>
 ChapterAnalysisController::history(QStringView path, const core::ProjectId& projectId,
                                    QStringView chapterId, QHash<QString, QString>* runChapters) {
-    auto opened = storage::ProjectDatabase::open(path);
+    auto opened = storage::ProjectDatabase::openForSession(path);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
         return *error;
     }
@@ -916,6 +917,9 @@ ChapterAnalysisController::history(QStringView path, const core::ProjectId& proj
     }
     QList<AnalysisHistoryEntry> entries;
     for (const auto& run : std::get<QList<storage::LLMRunRecord>>(listed)) {
+        if (QThread::currentThread()->isInterruptionRequested())
+            return storage::StorageError{
+                storage::StorageErrorCode::Conflict, QStringLiteral("历史加载已取消。"), {}, true};
         // The index contains only identifiers, not novel snapshots or provider payloads.
         // Known unrelated chapters never enter the expensive artifact/snapshot reader.
         if (!chapterId.isEmpty() && runChapters && runChapters->contains(run.id.toString()) &&

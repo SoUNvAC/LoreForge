@@ -31,6 +31,7 @@ class StorageIntegrationTest final : public QObject {
 
   private slots:
     void createsAndReopensAProject();
+    void sessionConnectionsKeepConstraintsAndFullOpenStillAudits();
     void preservesDocumentBytesAcrossReopen();
     void failedBookSaveRollsBackAllTables();
     void migratesAnExistingVersionZeroDatabase();
@@ -214,6 +215,49 @@ void StorageIntegrationTest::createsAndReopensAProject() {
     const auto loaded = reopenedProjects.find(projectRecord().id);
     QVERIFY(std::holds_alternative<loreforge::storage::ProjectRecord>(loaded));
     QCOMPARE(std::get<loreforge::storage::ProjectRecord>(loaded), projectRecord());
+}
+
+void StorageIntegrationTest::sessionConnectionsKeepConstraintsAndFullOpenStillAudits() {
+    using namespace loreforge;
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("session-audit.loreforge"));
+    auto created = storage::ProjectDatabase::create(path);
+    auto database = takeDatabase(created);
+    storage::ProjectRepository projects(*database);
+    QVERIFY(!projects.create(projectRecord()));
+    storage::BookRepository books(*database);
+    const auto document = test::handcraftedDocument();
+    QVERIFY(!books.saveDocument(projectRecord().id, document));
+    database.reset();
+    auto opened = storage::ProjectDatabase::openForSession(path);
+    QVERIFY(std::holds_alternative<std::unique_ptr<storage::ProjectDatabase>>(opened));
+    database = takeDatabase(opened);
+    storage::BookRepository sessionBooks(*database);
+    QVERIFY(std::holds_alternative<document::Document>(sessionBooks.loadDocument(document.id)));
+    auto invalid = document;
+    invalid.id = core::BookId::fromStableKey(QStringLiteral("invalid-project-book"));
+    QVERIFY(sessionBooks
+                .saveDocument(core::ProjectId::fromStableKey(QStringLiteral("missing-project")),
+                              invalid)
+                .has_value());
+    database.reset();
+    const auto connectionName = QUuid::createUuid().toString();
+    {
+        auto sql = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        sql.setDatabaseName(path);
+        QVERIFY(sql.open());
+        QSqlQuery query(sql);
+        QVERIFY(query.exec(QStringLiteral("PRAGMA foreign_keys=OFF")));
+        query.prepare(QStringLiteral("UPDATE books SET project_id=?"));
+        query.addBindValue(
+            core::ProjectId::fromStableKey(QStringLiteral("missing-project")).toString());
+        QVERIFY(query.exec());
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    const auto audited = storage::ProjectDatabase::open(path);
+    QVERIFY(std::holds_alternative<storage::StorageError>(audited));
+    QCOMPARE(std::get<storage::StorageError>(audited).code,
+             storage::StorageErrorCode::CorruptDatabase);
 }
 
 void StorageIntegrationTest::preservesDocumentBytesAcrossReopen() {

@@ -42,6 +42,7 @@
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTextCursor>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -463,11 +464,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+    closing_ = true;
+    cancelProjectOpen();
+    clearAnalysisHistoryCache();
     stopAutoAnalysis();
     analysisController_->cancel();
+    for (auto* loader : std::as_const(backgroundLoaders_)) {
+        disconnect(loader, nullptr, this, nullptr);
+        loader->requestInterruption();
+        loader->wait();
+        delete loader;
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    closing_ = true;
+    cancelProjectOpen();
+    clearAnalysisHistoryCache();
     stopAutoAnalysis();
     analysisController_->cancel();
     QMainWindow::closeEvent(event);
@@ -584,7 +597,7 @@ void MainWindow::approveRepairCandidate(QString candidateId) {
         return;
     }
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
         showStatusMessage(tr("Repair decision could not be saved."), 5000);
         reloadRepairQueue();
@@ -607,7 +620,7 @@ void MainWindow::rejectRepairCandidate(QString candidateId) {
         return;
     }
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
         showStatusMessage(tr("Repair decision could not be saved."), 5000);
         reloadRepairQueue();
@@ -630,7 +643,7 @@ void MainWindow::editRepairSuggestion(QString candidateId, QString suggestion) {
         return;
     }
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
         showStatusMessage(tr("Edited suggestion could not be saved."), 5000);
         reloadRepairQueue();
@@ -654,7 +667,7 @@ void MainWindow::protectRepairTerm(QString candidateId, QString canonicalSpellin
         return;
     }
     const auto id = core::ProofreadingCandidateId::fromString(candidateId);
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (!id || std::holds_alternative<storage::StorageError>(opened)) {
         showStatusMessage(tr("Protected term could not be saved."), 5000);
         reloadRepairQueue();
@@ -678,7 +691,7 @@ void MainWindow::reloadRepairQueue() {
     if (openedDatabasePath_.isEmpty() || !workspace_.has_value()) {
         return;
     }
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (std::holds_alternative<storage::StorageError>(opened)) {
         return;
     }
@@ -695,7 +708,117 @@ void MainWindow::reloadRepairQueue() {
     repairQueue_->setItems(std::move(items));
 }
 
+void MainWindow::trackBackgroundLoader(QThread* loader) {
+    backgroundLoaders_.append(loader);
+    connect(loader, &QThread::finished, this,
+            [this, loader] { backgroundLoaders_.removeAll(loader); });
+}
+
+void MainWindow::updateLoadingControls() {
+    if (analysisWorkbench_)
+        analysisWorkbench_->setHistoryLoading(projectLoader_ || historyLoader_);
+    if (projectExplorer_)
+        projectExplorer_->setEnabled(!projectLoader_);
+    if (chapterTree_)
+        chapterTree_->setEnabled(!projectLoader_);
+}
+
+void MainWindow::cancelProjectOpen() {
+    ++projectLoadGeneration_;
+    if (projectLoader_) {
+        projectLoader_->requestInterruption();
+        projectLoader_ = nullptr;
+        taskIndicator_->report(projectLoadTaskId_, TaskState::Cancelled, tr("已取消打开工程"));
+    }
+    updateLoadingControls();
+}
+
+bool MainWindow::openProjectFileAsync(QStringView filePath) {
+    if (!llmWorkbench_->flushConfiguration()) {
+        showStatusMessage(tr("当前工程 API 配置保存失败，未切换工程。"));
+        return false;
+    }
+    closing_ = false;
+    cancelProjectOpen();
+    stopAutoAnalysis();
+    analysisController_->cancel();
+    clearAnalysisHistoryCache();
+    const auto path = QFileInfo(filePath.trimmed().toString()).absoluteFilePath();
+    if (filePath.trimmed().isEmpty()) {
+        showLoadError(tr("A project file path is required."));
+        return false;
+    }
+    struct OpenResult {
+        std::optional<StoredWorkspace> workspace;
+        QList<proofreading::RepairQueueItem> repairs;
+        std::optional<storage::StorageError> error;
+    };
+    const auto result = std::make_shared<OpenResult>();
+    const auto generation = projectLoadGeneration_;
+    auto* loader = QThread::create([path, result] {
+        // SQLite connection and every repository stay on this worker thread.
+        auto opened = storage::ProjectDatabase::open(path); // Full audit once per project open.
+        if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
+            result->error = *error;
+            return;
+        }
+        if (QThread::currentThread()->isInterruptionRequested())
+            return;
+        auto database = std::get<std::unique_ptr<storage::ProjectDatabase>>(std::move(opened));
+        auto workspace = ProjectWorkspaceLoader::load(*database);
+        if (const auto* error = std::get_if<storage::StorageError>(&workspace)) {
+            result->error = *error;
+            return;
+        }
+        result->workspace = std::get<StoredWorkspace>(std::move(workspace));
+        storage::RepairQueueRepository repairs(*database);
+        for (const auto& project : result->workspace->projects) {
+            if (QThread::currentThread()->isInterruptionRequested())
+                return;
+            auto listed = repairs.list(project.metadata.id);
+            if (const auto* error = std::get_if<storage::StorageError>(&listed)) {
+                result->error = *error;
+                result->workspace.reset();
+                return;
+            }
+            result->repairs.append(
+                std::get<QList<proofreading::RepairQueueItem>>(std::move(listed)));
+        }
+    });
+    projectLoader_ = loader;
+    projectLoadTaskId_ = QUuid::createUuid();
+    const auto taskId = projectLoadTaskId_;
+    trackBackgroundLoader(loader);
+    connect(loader, &QThread::finished, this, [this, loader, generation, result, path, taskId] {
+        if (closing_ || generation != projectLoadGeneration_ || projectLoader_ != loader)
+            return;
+        projectLoader_ = nullptr;
+        updateLoadingControls();
+        if (result->error || !result->workspace) {
+            const auto message = result->error ? result->error->message : tr("工程加载已取消。");
+            showLoadError(message);
+            taskIndicator_->report(taskId, TaskState::Failed, tr("打开工程失败：%1").arg(message));
+            return;
+        }
+        openedDatabasePath_ = path;
+        setWorkspace(std::move(*result->workspace));
+        repairQueue_->setItems(std::move(result->repairs));
+        taskIndicator_->report(taskId, TaskState::Success, tr("工程已打开，可开始阅读"));
+        showStatusMessage(historyLoader_ ? tr("工程已打开，分析状态正在后台加载，可先阅读。")
+                                         : tr("工程已打开。"),
+                          5000);
+    });
+    connect(loader, &QThread::finished, loader, &QObject::deleteLater);
+    updateLoadingControls();
+    taskIndicator_->report(taskId, TaskState::Local, tr("正在后台校验并打开工程，可继续操作窗口"));
+    showStatusMessage(tr("正在后台打开 %1…").arg(QFileInfo(path).fileName()));
+    loader->start();
+    return true;
+}
+
 bool MainWindow::openProjectFile(QStringView filePath) {
+    closing_ = false;
+    cancelProjectOpen();
     if (!llmWorkbench_->flushConfiguration()) {
         showStatusMessage(tr("当前工程 API 配置保存失败，已保留当前工程与修改，未切换。"));
         return false;
@@ -743,12 +866,13 @@ void MainWindow::chooseProjectFile() {
     if (filePath.isEmpty()) {
         return;
     }
-    if (!openProjectFile(filePath)) {
+    if (!openProjectFileAsync(filePath)) {
         QMessageBox::critical(this, tr("Open failed"), workspaceStatus_->text());
     }
 }
 
 void MainWindow::setWorkspace(StoredWorkspace workspace) {
+    cancelProjectOpen();
     stopAutoAnalysis();
     QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
     navigation.beginGroup(navigationGroup(workspace.databasePath));
@@ -988,7 +1112,7 @@ void MainWindow::prepareChapterPreview(int maximumTokens, int reservedTokens) {
         taskIndicator_->report(taskId, TaskState::Failed, tr("预览失败：%1").arg(error->message));
         return;
     }
-    auto opened = storage::ProjectDatabase::open(openedDatabasePath_);
+    auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
     if (const auto* error = std::get_if<storage::StorageError>(&opened)) {
         analysisWorkbench_->invalidatePreview();
         analysisWorkbench_->showError(tr("准备失败；未发送。%1").arg(error->message));
@@ -1013,6 +1137,10 @@ void MainWindow::startChapterAnalysis() {
 }
 
 void MainWindow::runChapterAnalysis(QString resumePipeline, bool allowLegacyEndpoint) {
+    if (projectLoader_ || historyLoader_) {
+        analysisWorkbench_->showError(tr("工程/历史仍在后台加载；未发送小说。"));
+        return;
+    }
     ++autoNextGeneration_;
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
@@ -1122,15 +1250,63 @@ void MainWindow::scheduleNextChapter() {
 }
 
 void MainWindow::clearAnalysisHistoryCache() {
+    ++historyLoadGeneration_;
+    if (historyLoader_) {
+        historyLoader_->requestInterruption();
+        historyLoader_ = nullptr;
+    }
+    readyHistory_.reset();
     analysisHistoryIndexed_ = false;
     analysisRunChapters_.clear();
     analysisChapterHistory_.clear();
     analysisHistoryLru_.clear();
     analysisChapterUsage_.clear();
     analysisProjectUsage_ = {};
+    updateLoadingControls();
+}
+
+void MainWindow::startHistoryLoad() {
+    if (historyLoader_ || closing_ || !workspace_ || selectedProjectIndex_ < 0)
+        return;
+    struct Result {
+        storage::StorageResult<QList<AnalysisHistoryEntry>> history = QList<AnalysisHistoryEntry>{};
+        QHash<QString, QString> index;
+    };
+    const auto result = std::make_shared<Result>();
+    const auto generation = historyLoadGeneration_;
+    const auto path = openedDatabasePath_;
+    const auto projectId = workspace_->projects[selectedProjectIndex_].metadata.id;
+    auto* loader = QThread::create([result, path, projectId] {
+        result->history = ChapterAnalysisController::history(path, projectId, {}, &result->index);
+    });
+    historyLoader_ = loader;
+    trackBackgroundLoader(loader);
+    connect(loader, &QThread::finished, this, [this, loader, generation, result] {
+        if (closing_ || generation != historyLoadGeneration_ || historyLoader_ != loader)
+            return;
+        historyLoader_ = nullptr;
+        analysisRunChapters_ = std::move(result->index);
+        readyHistory_ = std::move(result->history);
+        updateLoadingControls();
+        reloadAnalysisHistory(); // Apply to the currently selected chapter, not the starting one.
+    });
+    connect(loader, &QThread::finished, loader, &QObject::deleteLater);
+    for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
+        auto* item = chapterTree_->topLevelItem(row);
+        item->setText(4, tr("加载中"));
+        item->setIcon(4, QIcon{});
+        item->setText(5, tr("加载中"));
+        item->setToolTip(4, tr("正在后台读取历史，尚不能判断是否已分析。"));
+        item->setToolTip(5, tr("正在后台读取历史，尚不能判断校对状态。"));
+        item->setData(4, kChapterDetailsRole, QJsonObject{});
+    }
+    updateLoadingControls();
+    loader->start();
 }
 
 void MainWindow::reloadAnalysisHistory(bool refresh) {
+    if (closing_)
+        return;
     const auto* book = selectedBook();
     const auto* item = chapterTree_->currentItem();
     if (!book || !item || openedDatabasePath_.isEmpty()) {
@@ -1141,6 +1317,10 @@ void MainWindow::reloadAnalysisHistory(bool refresh) {
         return;
     }
     const auto chapterId = book->chapters[index].id.toString();
+    if (historyLoader_) {
+        updateLoadingControls();
+        return;
+    }
     if (analysisHistoryIndexed_ && !refresh && analysisChapterHistory_.contains(chapterId)) {
         analysisHistoryLru_.removeAll(chapterId);
         analysisHistoryLru_.append(chapterId);
@@ -1149,9 +1329,28 @@ void MainWindow::reloadAnalysisHistory(bool refresh) {
         return;
     }
     const bool initialLoad = !analysisHistoryIndexed_;
-    const auto history = ChapterAnalysisController::history(
-        openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id,
-        initialLoad ? QStringView{} : QStringView(chapterId), &analysisRunChapters_);
+    // Tiny projects complete synchronously without a loading flash. Larger histories never
+    // deserialize novel snapshots or provider artifacts on the GUI thread at initial open.
+    if (initialLoad && !readyHistory_) {
+        auto opened = storage::ProjectDatabase::openForSession(openedDatabasePath_);
+        if (auto* database = std::get_if<std::unique_ptr<storage::ProjectDatabase>>(&opened)) {
+            storage::LLMRunRepository runs(**database);
+            const auto listed =
+                runs.listForProject(workspace_->projects[selectedProjectIndex_].metadata.id);
+            if (const auto* records = std::get_if<QList<storage::LLMRunRecord>>(&listed);
+                records && records->size() >= 24) {
+                startHistoryLoad();
+                return;
+            }
+        }
+    }
+    const auto history =
+        readyHistory_
+            ? std::move(*readyHistory_)
+            : ChapterAnalysisController::history(
+                  openedDatabasePath_, workspace_->projects.at(selectedProjectIndex_).metadata.id,
+                  initialLoad ? QStringView{} : QStringView(chapterId), &analysisRunChapters_);
+    readyHistory_.reset();
     if (const auto* error = std::get_if<storage::StorageError>(&history)) {
         clearAnalysisHistoryCache();
         analysisWorkbench_->showError(tr("历史读取失败：%1").arg(error->message));
@@ -1320,6 +1519,10 @@ void MainWindow::refreshChapterIndicators() {
 void MainWindow::showChapterDetails(QTreeWidgetItem* item, int column) {
     if (!item || (column != 4 && column != 5))
         return;
+    if (historyLoader_) {
+        showStatusMessage(tr("历史仍在后台加载，请稍后查看详情。"), 5000);
+        return;
+    }
     const auto payload = item->data(4, kChapterDetailsRole).toJsonObject();
     if (column == 4) {
         QMessageBox::information(this, tr("章节分析状态"),

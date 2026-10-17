@@ -7,6 +7,7 @@
 #include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QThread>
 
 #include <cmath>
 #include <utility>
@@ -160,6 +161,11 @@ ChapterRepository::loadForBook(const core::BookId& bookId) const {
 
     QList<document::Chapter> chapters;
     while (query.next()) {
+        if (QThread::currentThread()->isInterruptionRequested())
+            return StorageError{StorageErrorCode::Conflict,
+                                QStringLiteral("Chapter loading was cancelled."),
+                                {},
+                                true};
         const auto chapterId = core::ChapterId::fromString(query.value(0).toString());
         bool indexOk = false;
         const auto index = query.value(1).toLongLong(&indexOk);

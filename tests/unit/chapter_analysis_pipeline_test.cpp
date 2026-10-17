@@ -356,6 +356,8 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void automaticallyRunsNextChapter();
     void showsChapterIndicatorsAndPersistedProofreading();
     void switchesChaptersWithoutReloadingUnrelatedArtifacts();
+    void opensProjectInBackgroundAndDiscardsStaleResults();
+    void loadsLargeHistoryInBackgroundWhileReading();
 
   private:
     QTemporaryDir highlightSettings_;
@@ -573,6 +575,95 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
     QVERIFY(reopened.openProjectFile(fixture.path));
     QVERIFY(
         !reopened.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"))->isChecked());
+}
+
+void ChapterAnalysisPipelineTest::opensProjectInBackgroundAndDiscardsStaleResults() {
+    Fixture first, second;
+    QVERIFY(first.initialize(test::markdownFixtureChapter(), true));
+    QVERIFY(second.initialize(test::markdownFixtureChapter(), true));
+    app::MainWindow window;
+    bool heartbeat = false;
+    QTimer::singleShot(0, &window, [&] { heartbeat = true; });
+    QVERIFY(window.openProjectFileAsync(first.path));
+    QVERIFY(window.projectOpening());
+    QTRY_VERIFY(!window.projectOpening());
+    QVERIFY(heartbeat);
+    auto* metadata = window.findChild<QLabel*>(QStringLiteral("bookMetadata"));
+    QVERIFY(metadata);
+    QVERIFY(metadata->text().contains(first.book.id.toString()));
+    QVERIFY(window.openProjectFileAsync(first.path));
+    QVERIFY(window.openProjectFileAsync(second.path));
+    QTRY_VERIFY(!window.projectOpening());
+    QVERIFY(metadata->text().contains(second.book.id.toString()));
+    QTest::qWait(30);
+    QVERIFY(metadata->text().contains(second.book.id.toString()));
+    QVERIFY(window.openProjectFileAsync(first.path));
+    QVERIFY(window.openProjectFile(second.path)); // Synchronous caller also supersedes old workers.
+    QTest::qWait(30);
+    QVERIFY(metadata->text().contains(second.book.id.toString()));
+    QVERIFY(window.openProjectFileAsync(first.path));
+    window.close();
+    QVERIFY(!window.projectOpening());
+    QTest::qWait(30);
+    QVERIFY(metadata->text().contains(second.book.id.toString()));
+    app::MainWindow missing;
+    QVERIFY(missing.openProjectFileAsync(
+        first.destination.filePath(QStringLiteral("missing.loreforge"))));
+    QTRY_VERIFY(!missing.projectOpening());
+    QVERIFY(missing.findChild<QLabel*>(QStringLiteral("workspaceStatus"))
+                ->text()
+                .contains(QStringLiteral("Open failed")));
+}
+
+void ChapterAnalysisPipelineTest::loadsLargeHistoryInBackgroundWhileReading() {
+    Fixture fixture, other;
+    QVERIFY(fixture.initialize(test::markdownFixtureChapter(), true));
+    QVERIFY(other.initialize(test::markdownFixtureChapter(), true));
+    Server server;
+    server.makeOutput = [](const QJsonObject& user, int) {
+        return user.contains(QStringLiteral("analysis")) ? reviewFor(user) : analysisFor(user);
+    };
+    Controller controller;
+    QSignalSpy finished(&controller, &Controller::finished);
+    for (int i = 0; i < 8; ++i) {
+        controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
+        QTRY_COMPARE(finished.size(), i + 1);
+    }
+    app::MainWindow window;
+    QVERIFY(window.openProjectFile(fixture.path));
+    QVERIFY(window.analysisHistoryLoading());
+    auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("chapterTree"));
+    auto* analyze = window.findChild<QPushButton*>(QStringLiteral("dialogueSegmentChapter"));
+    QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("加载中"));
+    QVERIFY(!analyze->isEnabled());
+    QVERIFY(selector->isEnabled());
+    selector->setCurrentIndex(
+        1); // Reading and selection work before the background result arrives.
+    QCOMPARE(tree->currentItem(), tree->topLevelItem(1));
+    QTRY_VERIFY(!window.analysisHistoryLoading());
+    QVERIFY(analyze->isEnabled());
+    QCOMPARE(tree->currentItem(), tree->topLevelItem(1));
+    QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("已分析"));
+    QCOMPARE(tree->topLevelItem(1)->text(4), QStringLiteral("未分析"));
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("analysisTokenTotals"))
+                ->text()
+                .contains(QStringLiteral("项目已知 336 token")));
+    QVERIFY(window.openProjectFile(fixture.path));
+    QVERIFY(window.analysisHistoryLoading());
+    QVERIFY(window.openProjectFile(other.path));
+    QTest::qWait(50);
+    QVERIFY(!window.analysisHistoryLoading());
+    QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("未分析"));
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("bookMetadata"))
+                ->text()
+                .contains(other.book.id.toString()));
+    QVERIFY(window.openProjectFile(fixture.path));
+    QVERIFY(window.analysisHistoryLoading());
+    window.close();
+    QVERIFY(!window.analysisHistoryLoading());
+    QTest::qWait(20);
+    QCOMPARE(server.requests.size(), 24); // Background loading never sends novel text.
 }
 
 void ChapterAnalysisPipelineTest::switchesChaptersWithoutReloadingUnrelatedArtifacts() {

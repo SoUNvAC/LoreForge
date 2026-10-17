@@ -27,6 +27,10 @@ class ProjectDatabase final {
     [[nodiscard]] static StorageResult<std::unique_ptr<ProjectDatabase>>
     create(QStringView filePath);
     [[nodiscard]] static StorageResult<std::unique_ptr<ProjectDatabase>> open(QStringView filePath);
+    // Internal connections after a successful full project open. Keeps schema/row/FK enforcement,
+    // but does not repeat the whole-file quick_check and foreign_key_check audits.
+    [[nodiscard]] static StorageResult<std::unique_ptr<ProjectDatabase>>
+    openForSession(QStringView filePath);
 
     ~ProjectDatabase();
 
@@ -41,7 +45,7 @@ class ProjectDatabase final {
 
   private:
     [[nodiscard]] static StorageResult<std::unique_ptr<ProjectDatabase>>
-    openDatabase(QStringView filePath, bool createNew);
+    openDatabase(QStringView filePath, bool createNew, bool fullAudit = true);
     ProjectDatabase(QString filePath, QString connectionName, int schemaVersion);
 
     [[nodiscard]] QSqlDatabase database() const;
