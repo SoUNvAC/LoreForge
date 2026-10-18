@@ -1,5 +1,6 @@
 #include "novel_analysis_workbench.h"
 #include "chapter_evidence.h"
+#include "startup_profile.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -551,6 +552,7 @@ void NovelAnalysisWorkbench::showHistory(QList<AnalysisHistoryEntry> history, QS
 }
 
 void NovelAnalysisWorkbench::showHistoryEntry(int index) {
+    StartupProfile profile("render-history-entry");
     if (index < 0 || index >= history_.size()) {
         return;
     }

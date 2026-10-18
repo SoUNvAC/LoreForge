@@ -40,6 +40,9 @@ Chapter Tree 在 Blocks 右侧显示“分析”“错字”两列。分析只�
 每个后台任务独立创建并销毁自己的 SQLite 连接，不跨线程使用同一连接；关闭时中断并收尾任务。
 首次完整打开仍执行 quick_check、foreign_key_check 和 schema 校验；同一已验证工程的内部会话连接使用 openForSession，保留 schema 校验、外键强制及逐条数据验证，不重复整库审计。发生迁移时仍完整审计。
 首次访问其他章只读取该章完整历史，最近四章使用有界 LRU 缓存；新分析结果保存后增量更新当前章状态和项目累计。
+章节树统一行高，章条目批量插入；批量填充“加载中”、恢复状态或显示错误时，同时暂停绘制和 ResizeToContents 列宽重算，结束后统一恢复。
+仅把数据库读取放到后台不足以避免卡顿：自动列宽在每格 dataChanged 后反复扫描数百行，会造成界面线程的平方级布局开销。743 章可见窗口回归测试用心跳监测该问题。
+可设置 `LOREFORGE_PROFILE_PROJECT` 为隔离工程副本，运行 `LoreForgeChapterAnalysisPipelineTests profilesLargeProjectOpen` 测量正文就绪、全历史就绪和最大界面心跳间隔；固定阶段日志只记录名称与耗时，不记录小说、地址或密钥，不发 API 请求。
 同书切章保留章节下拉框选项，不重复构建整份章节列表。切换工程/书籍或重新打开会清空缓存，其他进程改写项目时需重新打开以刷新。
 
 新版独立对白分析在同一次分析员请求中附带保守的 `proofreading` 数组：unit_id、original、suggestion、reason。

@@ -358,6 +358,7 @@ class ChapterAnalysisPipelineTest final : public QObject {
     void switchesChaptersWithoutReloadingUnrelatedArtifacts();
     void opensProjectInBackgroundAndDiscardsStaleResults();
     void loadsLargeHistoryInBackgroundWhileReading();
+    void profilesLargeProjectOpen();
 
   private:
     QTemporaryDir highlightSettings_;
@@ -577,6 +578,33 @@ void ChapterAnalysisPipelineTest::automaticallyRunsNextChapter() {
         !reopened.findChild<QCheckBox*>(QStringLiteral("analysisAutoNextChapter"))->isChecked());
 }
 
+void ChapterAnalysisPipelineTest::profilesLargeProjectOpen() {
+    const auto path = qEnvironmentVariable("LOREFORGE_PROFILE_PROJECT");
+    if (path.isEmpty())
+        QSKIP("Set an isolated project copy to measure startup UI latency; never sends API "
+              "requests.");
+    app::MainWindow window;
+    window.resize(1500, 950);
+    window.show();
+    QElapsedTimer total, interval;
+    total.start();
+    interval.start();
+    qint64 maximumGap = 0;
+    QTimer heartbeat;
+    heartbeat.setInterval(5);
+    connect(&heartbeat, &QTimer::timeout, &window,
+            [&] { maximumGap = qMax(maximumGap, interval.restart()); });
+    heartbeat.start();
+    QVERIFY(window.openProjectFileAsync(path));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.projectOpening(), 90000);
+    const auto readingReady = total.elapsed();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.analysisHistoryLoading(), 90000);
+    QTest::qWait(50);
+    qInfo() << "Profile reading-ready ms:" << readingReady << "all-ready ms:" << total.elapsed()
+            << "UI maximum gap ms:" << maximumGap;
+    QVERIFY2(maximumGap < 1500, "Startup blocked the GUI event loop for more than 1.5 seconds.");
+}
+
 void ChapterAnalysisPipelineTest::opensProjectInBackgroundAndDiscardsStaleResults() {
     Fixture first, second;
     QVERIFY(first.initialize(test::markdownFixtureChapter(), true));
@@ -629,7 +657,34 @@ void ChapterAnalysisPipelineTest::loadsLargeHistoryInBackgroundWhileReading() {
         controller.start(fixture.path, fixture.book, 0, fixture.preview, server.connection());
         QTRY_COMPARE(finished.size(), i + 1);
     }
+    // Match the real novel's scale, including visible ResizeToContents columns. Small
+    // three-chapter fixtures cannot expose per-cell whole-tree geometry recalculation.
+    for (int i = fixture.book.chapters.size(); i < 743; ++i) {
+        auto chapter = fixture.book.chapters.last();
+        chapter.id = core::ChapterId::fromStableKey(QStringLiteral("startup-chapter-%1").arg(i));
+        chapter.index = i;
+        chapter.title = QStringLiteral("第 %1 章 · 原创批量加载测试").arg(i + 1);
+        for (auto& block : chapter.blocks)
+            block.sourceSpan.sourceId = QStringLiteral("synthetic-startup-%1").arg(i);
+        fixture.book.chapters.append(chapter);
+    }
+    {
+        auto opened = Database::open(fixture.path);
+        auto database = std::get<std::unique_ptr<Database>>(std::move(opened));
+        storage::BookRepository books(*database);
+        QVERIFY(!books.saveDocument(fixture.projectId, fixture.book));
+    }
     app::MainWindow window;
+    window.resize(1500, 950);
+    window.show();
+    QElapsedTimer interval;
+    interval.start();
+    qint64 maximumGap = 0;
+    QTimer heartbeat;
+    heartbeat.setInterval(5);
+    connect(&heartbeat, &QTimer::timeout, &window,
+            [&] { maximumGap = qMax(maximumGap, interval.restart()); });
+    heartbeat.start();
     QVERIFY(window.openProjectFile(fixture.path));
     QVERIFY(window.analysisHistoryLoading());
     auto* selector = window.findChild<QComboBox*>(QStringLiteral("analysisChapterSelector"));
@@ -642,10 +697,14 @@ void ChapterAnalysisPipelineTest::loadsLargeHistoryInBackgroundWhileReading() {
         1); // Reading and selection work before the background result arrives.
     QCOMPARE(tree->currentItem(), tree->topLevelItem(1));
     QTRY_VERIFY(!window.analysisHistoryLoading());
+    QTest::qWait(20);
+    qInfo() << "743-chapter startup GUI maximum gap ms:" << maximumGap;
+    QVERIFY2(maximumGap < 1500, "Batch indicator updates repeatedly relaid out the whole tree.");
     QVERIFY(analyze->isEnabled());
     QCOMPARE(tree->currentItem(), tree->topLevelItem(1));
     QCOMPARE(tree->topLevelItem(0)->text(4), QStringLiteral("已分析"));
     QCOMPARE(tree->topLevelItem(1)->text(4), QStringLiteral("未分析"));
+    QCOMPARE(tree->topLevelItemCount(), 743);
     QVERIFY(window.findChild<QLabel*>(QStringLiteral("analysisTokenTotals"))
                 ->text()
                 .contains(QStringLiteral("项目已知 336 token")));

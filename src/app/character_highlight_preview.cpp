@@ -1,4 +1,5 @@
 #include "character_highlight_preview.h"
+#include "startup_profile.h"
 
 #include <QColorDialog>
 #include <QComboBox>
@@ -358,6 +359,7 @@ void CharacterHighlightPreview::showImportedText(QString bookId, QString text) {
 }
 void CharacterHighlightPreview::showAnalysis(QString bookId, const QJsonObject& source,
                                              const QJsonObject& analysis, QString status) {
+    StartupProfile profile("render-highlights");
     showImportedText(std::move(bookId), source.value(QStringLiteral("utf8")).toString());
     const auto bytes = source.value(QStringLiteral("utf8")).toString().toUtf8();
     const auto base = source.value(QStringLiteral("start_byte")).toInteger(-1);

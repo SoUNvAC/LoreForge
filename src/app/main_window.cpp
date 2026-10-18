@@ -1,6 +1,7 @@
 #include "main_window.h"
 #include "character_highlight_preview.h"
 #include "dialogue_segmentation.h"
+#include "startup_profile.h"
 #include "stream_monitor_widget.h"
 
 #include "context_inspector.h"
@@ -59,6 +60,30 @@ constexpr int kProjectIndexRole = Qt::UserRole;
 constexpr int kBookIndexRole = Qt::UserRole + 1;
 constexpr int kChapterIndexRole = Qt::UserRole + 2;
 constexpr int kChapterDetailsRole = Qt::UserRole + 3;
+
+// ResizeToContents reacts synchronously to every dataChanged signal. Freeze geometry as
+// well as painting while filling hundreds of rows; disabling painting alone is insufficient.
+class ChapterTreeUpdate final {
+  public:
+    explicit ChapterTreeUpdate(QTreeWidget* tree) : tree_(tree), updates_(tree->updatesEnabled()) {
+        tree_->setUpdatesEnabled(false);
+        for (int column = 0; column < tree_->columnCount(); ++column) {
+            modes_.append(tree_->header()->sectionResizeMode(column));
+            if (modes_.last() == QHeaderView::ResizeToContents)
+                tree_->header()->setSectionResizeMode(column, QHeaderView::Interactive);
+        }
+    }
+    ~ChapterTreeUpdate() {
+        for (int column = 0; column < modes_.size(); ++column)
+            tree_->header()->setSectionResizeMode(column, modes_[column]);
+        tree_->setUpdatesEnabled(updates_);
+    }
+
+  private:
+    QTreeWidget* tree_;
+    bool updates_;
+    QList<QHeaderView::ResizeMode> modes_;
+};
 
 QIcon chapterStatusIcon(const QColor& color) {
     QPixmap pixmap(16, 16);
@@ -204,6 +229,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     chapterTree_ = new QTreeWidget;
     chapterTree_->setObjectName(QStringLiteral("chapterTree"));
+    chapterTree_->setUniformRowHeights(true);
     chapterTree_->setHeaderLabels(
         {tr("Chapter"), tr("字数"), tr("汉字"), tr("Blocks"), tr("分析"), tr("错字")});
     chapterTree_->headerItem()->setToolTip(
@@ -872,6 +898,7 @@ void MainWindow::chooseProjectFile() {
 }
 
 void MainWindow::setWorkspace(StoredWorkspace workspace) {
+    StartupProfile profile("apply-workspace");
     cancelProjectOpen();
     stopAutoAnalysis();
     QSettings navigation(navigationSettingsPath(), QSettings::IniFormat);
@@ -960,6 +987,7 @@ void MainWindow::selectProjectItem(QTreeWidgetItem* current, QTreeWidgetItem* pr
 }
 
 void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
+    StartupProfile profile("populate-book");
     if (!workspace_.has_value() || projectIndex < 0 ||
         projectIndex >= workspace_->projects.size() || bookIndex < 0 ||
         bookIndex >= workspace_->projects.at(projectIndex).books.size()) {
@@ -967,6 +995,7 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
         return;
     }
     clearAnalysisHistoryCache();
+    ChapterTreeUpdate treeUpdate(chapterTree_);
     selectedProjectIndex_ = projectIndex;
     selectedBookIndex_ = bookIndex;
     const auto& book = workspace_->projects.at(projectIndex).books.at(bookIndex);
@@ -978,15 +1007,18 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
                                         book.id.toString()))
             .toString();
     chapterTree_->clear();
+    QList<QTreeWidgetItem*> chapterItems;
+    chapterItems.reserve(book.chapters.size());
     for (const auto& chapter : book.chapters) {
         const auto metrics = DocumentMetrics::forChapter(chapter);
-        auto* item = new QTreeWidgetItem(chapterTree_,
-                                         {chapter.title, QString::number(metrics.characterCount),
+        auto* item = new QTreeWidgetItem({chapter.title, QString::number(metrics.characterCount),
                                           QString::number(metrics.hanCharacterCount),
                                           QString::number(metrics.blockCount)});
         item->setData(0, kChapterIndexRole, chapter.index);
         item->setToolTip(0, tr("Chapter ID: %1").arg(chapter.id.toString()));
+        chapterItems.append(item);
     }
+    chapterTree_->addTopLevelItems(chapterItems);
 
     const auto totals = DocumentMetrics::forDocument(book);
     documentSummary_->setText(tr("%1 — %2 chapters · 总字数：%3 · 总汉字：%4")
@@ -1017,6 +1049,7 @@ void MainWindow::showBook(qsizetype projectIndex, qsizetype bookIndex) {
 }
 
 void MainWindow::displayChapter(QTreeWidgetItem* current, QTreeWidgetItem* previous) {
+    StartupProfile profile("display-chapter");
     if (!advancingAutomatically_)
         stopAutoAnalysis();
     analysisController_->cancel();
@@ -1291,6 +1324,7 @@ void MainWindow::startHistoryLoad() {
         reloadAnalysisHistory(); // Apply to the currently selected chapter, not the starting one.
     });
     connect(loader, &QThread::finished, loader, &QObject::deleteLater);
+    ChapterTreeUpdate treeUpdate(chapterTree_);
     for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
         auto* item = chapterTree_->topLevelItem(row);
         item->setText(4, tr("加载中"));
@@ -1305,6 +1339,7 @@ void MainWindow::startHistoryLoad() {
 }
 
 void MainWindow::reloadAnalysisHistory(bool refresh) {
+    StartupProfile profile("apply-history");
     if (closing_)
         return;
     const auto* book = selectedBook();
@@ -1352,6 +1387,7 @@ void MainWindow::reloadAnalysisHistory(bool refresh) {
                   initialLoad ? QStringView{} : QStringView(chapterId), &analysisRunChapters_);
     readyHistory_.reset();
     if (const auto* error = std::get_if<storage::StorageError>(&history)) {
+        ChapterTreeUpdate treeUpdate(chapterTree_);
         clearAnalysisHistoryCache();
         analysisWorkbench_->showError(tr("历史读取失败：%1").arg(error->message));
         for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
@@ -1407,6 +1443,7 @@ void MainWindow::reloadAnalysisHistory(bool refresh) {
             chapters[entry.context.content.value(QStringLiteral("chapter_id")).toString()].append(
                 entry);
     }
+    ChapterTreeUpdate treeUpdate(chapterTree_);
     for (int row = 0; row < chapterTree_->topLevelItemCount(); ++row) {
         auto* chapter = chapterTree_->topLevelItem(row);
         const auto chapterIndex = chapter->data(0, kChapterIndexRole).toInt();
