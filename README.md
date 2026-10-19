@@ -80,3 +80,10 @@ cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ```
+
+CI saves the chapter-analysis pipeline's QtTest text and JUnit reports in
+`build/windows-msvc-debug/test-results/`, plus a CTest JUnit summary for all test groups.
+The diagnostic step prints the text report and exposes `FAIL!` details as workflow annotations.
+The `windows-debug-test-results-<attempt>` artifact includes these reports and CTest's last-run
+logs, even when tests fail; it is retained for 14 days. Test failures remain failures—no retries,
+skipped assertions, or relaxed timing thresholds are introduced by report collection.

@@ -210,7 +210,14 @@ qt_add_executable(LoreForgeChapterPreviewTests chapter_preview_test.cpp)
 qt_add_executable(LoreForgeChapterAnalysisPipelineTests chapter_analysis_pipeline_test.cpp)
 target_include_directories(LoreForgeChapterAnalysisPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(LoreForgeChapterAnalysisPipelineTests PRIVATE LoreForge::DesktopUi Qt6::Test Qt6::Network)
-add_test(NAME LoreForgeChapterAnalysisPipelineTests COMMAND LoreForgeChapterAnalysisPipelineTests)
+file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/test-results")
+add_test(
+    NAME LoreForgeChapterAnalysisPipelineTests
+    COMMAND LoreForgeChapterAnalysisPipelineTests
+        -o -,txt
+        -o "${PROJECT_BINARY_DIR}/test-results/LoreForgeChapterAnalysisPipelineTests.txt,txt"
+        -o "${PROJECT_BINARY_DIR}/test-results/LoreForgeChapterAnalysisPipelineTests.xml,junitxml"
+)
 set_tests_properties(LoreForgeChapterAnalysisPipelineTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 target_include_directories(LoreForgeChapterPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(LoreForgeChapterPreviewTests PRIVATE LoreForge::DesktopUi Qt6::Test)

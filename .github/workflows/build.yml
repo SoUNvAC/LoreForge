@@ -39,4 +39,38 @@ jobs:
         run: cmake --build --preset windows-msvc-debug
 
       - name: Test
-        run: ctest --preset windows-msvc-debug
+        shell: pwsh
+        run: |
+          $reportPath = Join-Path $PWD 'build/windows-msvc-debug/test-results/ctest.xml'
+          ctest --preset windows-msvc-debug --output-junit $reportPath
+          exit $LASTEXITCODE
+
+      - name: Publish QtTest diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $reports = Get-ChildItem -Path 'build/windows-msvc-debug/test-results/*.txt' -ErrorAction SilentlyContinue
+          foreach ($report in $reports) {
+            Write-Output "::group::$($report.Name)"
+            Get-Content -LiteralPath $report.FullName | ForEach-Object { Write-Host $_ }
+            Write-Output '::endgroup::'
+
+            $failures = Select-String -LiteralPath $report.FullName -Pattern '^FAIL!' -Context 0,6
+            foreach ($failure in $failures) {
+              $details = (@($failure.Line) + $failure.Context.PostContext) -join "`n"
+              $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=QtTest failure::$details"
+            }
+          }
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-debug-test-results-${{ github.run_attempt }}
+          path: |
+            build/windows-msvc-debug/test-results/
+            build/windows-msvc-debug/Testing/Temporary/LastTest.log
+            build/windows-msvc-debug/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: warn
+          retention-days: 14
